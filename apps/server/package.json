@@ -1,0 +1,17 @@
+{
+  "name": "@kaling/server",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "start": "tsx src/index.ts"
+  },
+  "dependencies": {
+    "@kaling/shared": "*",
+    "@kaling/mechanics": "*",
+    "socket.io": "^4.8.1",
+    "tsx": "^4.20.6",
+    "@kaling/timer-engine": "*"
+  }
+}

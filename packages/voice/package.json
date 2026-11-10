@@ -1,0 +1,13 @@
+{
+  "name": "@kaling/voice",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": "./src/index.ts",
+  "dependencies": {
+    "@kaling/shared": "*",
+    "@kaling/mechanics": "*",
+    "zod": "^4.6.7",
+    "yaml": "^2.8.1"
+  }
+}

@@ -1,0 +1,30 @@
+{
+  "name": "kaling-timer",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "engines": {
+    "node": ">=22.16"
+  },
+  "scripts": {
+    "dev": "concurrently -k \"npm run dev -w @kaling/server\" \"npm run dev -w @kaling/desktop\"",
+    "build": "tsc && npm run build -w @kaling/desktop",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run --exclude '**/e2e/**'",
+    "desktop": "npm run tauri -w @kaling/desktop -- dev",
+    "test:e2e": "playwright test"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.65.0",
+    "@types/node": "^24.10.0",
+    "concurrently": "^9.2.1",
+    "prettier": "^3.9.10",
+    "tsx": "^4.20.6",
+    "typescript": "~5.9.3",
+    "vitest": "^3.2.4"
+  }
+}

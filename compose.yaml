@@ -1,0 +1,23 @@
+services:
+  server:
+    build: .
+    ports:
+      - "3001:3001"
+    environment:
+      DATABASE_PATH: /data/rooms.sqlite
+    volumes:
+      - room-data:/data
+    restart: unless-stopped
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://localhost:3001/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))",
+        ]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+volumes:
+  room-data:
