@@ -102,6 +102,15 @@ button {
 button:hover {
   background: #345575;
 }
+button.toggle-active {
+  color: #eafff6;
+  background: #23634f;
+  border-color: #80dfbd;
+  box-shadow: inset 0 0 0 1px #80dfbd;
+}
+button.toggle-active:hover {
+  background: #2e7a62;
+}
 button:disabled {
   opacity: 0.4;
   cursor: default;
@@ -213,5 +222,129 @@ summary:focus-visible {
   display: none;
 }
 .compact .timer {
-  padding: 10px 12px;
+  padding: 8px 10px;
+}
+.skill-heading {
+  min-width: 0;
+  flex: 1;
+}
+.voice-hint {
+  color: #a4dccd;
+  font-size: 11px;
+  overflow-wrap: anywhere;
+  margin-top: 3px;
+}
+.timer-title {
+  align-items: start;
+}
+.timer-title > span {
+  font-size: 11px;
+}
+.voice-diagnostics {
+  margin: 6px 0;
+  padding: 6px 10px;
+  font-size: 12px;
+}
+main.compact {
+  padding: 12px;
+}
+.compact section {
+  margin: 8px 0;
+  padding: 8px 12px;
+}
+.compact .digits {
+  font-size: 40px;
+}
+.compact .timer p {
+  margin: 4px 0;
+  font-size: 12px;
+}
+.compact footer {
+  margin: 8px 0;
+}
+.compact details {
+  margin: 6px 0;
+  padding: 6px 12px;
+}
+.compact .members {
+  padding: 4px 0;
+}
+.compact section > label {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 4px 0;
+}
+.compact section > label select {
+  flex: 1;
+  width: auto;
+  min-width: 100px;
+  margin-top: 0;
+}
+html.overlay-mode,
+.overlay-mode body,
+.overlay-mode #root {
+  background: transparent;
+  margin: 0;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+}
+.overlay-shell {
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  border: 1px solid #749d9f88;
+  border-radius: 12px;
+  padding: 12px;
+  color: #effffb;
+  user-select: none;
+  overflow: hidden;
+}
+.overlay-header {
+  cursor: move;
+  flex: 0 0 auto;
+  font-size: 13px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid #91bebc55;
+}
+.overlay-header span {
+  font-size: 11px;
+}
+.overlay-locked .overlay-header {
+  cursor: default;
+}
+.overlay-timers {
+  flex: 1;
+  overflow: auto;
+  min-height: 0;
+}
+.overlay-timer {
+  padding: 10px 0;
+  border-bottom: 1px solid #91bebc33;
+}
+.overlay-timer h2 {
+  font-size: 15px;
+}
+.overlay-timer .row > span,
+.overlay-timer small {
+  font-size: 11px;
+  color: #c9dada;
+}
+.overlay-digits {
+  font-size: clamp(38px, 14vw, 64px);
+  line-height: 1.12;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  color: #9defcd;
+}
+.overlay-footer {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 4px;
+  flex: 0 0 auto;
+  margin: 8px 0 0;
+  font-size: 10px;
+  color: #c9dada;
 }

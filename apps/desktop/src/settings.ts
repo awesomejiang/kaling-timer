@@ -1,11 +1,15 @@
 import { z } from "zod";
-import { SkillIdSchema, ZoneSchema, HotkeyActions } from "@kaling/shared";
+import { SkillIdSchema, HotkeyActions } from "@kaling/shared";
 export const SettingsSchema = z
   .object({
     compact: z.boolean().default(true),
     volume: z.number().min(0).max(1),
     mute: z.boolean(),
-    extraZones: z.array(ZoneSchema),
+    remindersEnabled: z.boolean().default(true),
+    voiceEnabled: z.boolean().default(true),
+    overlayEnabled: z.boolean().default(true),
+    overlayLocked: z.boolean().default(false),
+    overlayOpacity: z.number().min(0.15).max(1).default(0.8),
     disabledSkills: z.array(SkillIdSchema),
     leads: z.record(
       SkillIdSchema,
@@ -19,6 +23,7 @@ export const SettingsSchema = z
     outputDevice: z.string(),
     voiceConfigPath: z.string(),
     hotkeys: z.record(z.string(), z.string().max(80)),
+    hotkeysOptInVersion: z.literal(1).default(1),
     serverUrl: z.string(),
   })
   .strict();
@@ -27,7 +32,11 @@ export const defaults: Settings = {
   compact: true,
   volume: 0.7,
   mute: false,
-  extraZones: [],
+  remindersEnabled: true,
+  voiceEnabled: true,
+  overlayEnabled: true,
+  overlayLocked: false,
+  overlayOpacity: 0.8,
   disabledSkills: [],
   leads: Object.fromEntries(
     SkillIdSchema.options.map((id) => [id, [30, 10]]),
@@ -40,21 +49,40 @@ export const defaults: Settings = {
   outputDevice: "",
   voiceConfigPath: "",
   serverUrl: import.meta.env.VITE_SERVER_URL ?? "",
-  hotkeys: {
-    ...Object.fromEntries(Object.keys(HotkeyActions).map((key) => [key, ""])),
-    start: "CommandOrControl+Alt+S",
-    p2: "CommandOrControl+Alt+2",
-    p3: "CommandOrControl+Alt+3",
-    perils: "CommandOrControl+Alt+D",
-    tiger: "CommandOrControl+Alt+T",
-    reset: "CommandOrControl+Alt+R",
-  },
+  hotkeys: Object.fromEntries(
+    Object.keys(HotkeyActions).map((key) => [key, ""]),
+  ),
+  hotkeysOptInVersion: 1,
 };
 export function readSettings(): Settings {
   try {
-    const parsed = SettingsSchema.safeParse(
-      JSON.parse(localStorage.getItem("kaling-settings") ?? "null"),
+    const stored = JSON.parse(
+      localStorage.getItem("kaling-settings") ?? "null",
     );
+    // Retire this field without discarding the user's other saved preferences.
+    let migratedHotkeys = false;
+    if (stored && typeof stored === "object" && !Array.isArray(stored)) {
+      delete stored.extraZones;
+      if (
+        stored.leads &&
+        typeof stored.leads === "object" &&
+        !Array.isArray(stored.leads)
+      )
+        stored.leads.p2_kaling_scroll ??= defaults.leads.p2_kaling_scroll;
+      if (stored.hotkeysOptInVersion === undefined) {
+        stored.hotkeys = { ...defaults.hotkeys };
+        stored.hotkeysOptInVersion = 1;
+        migratedHotkeys = true;
+      }
+    }
+    const parsed = SettingsSchema.safeParse(stored);
+    if (parsed.success && migratedHotkeys) {
+      try {
+        writeSettings(parsed.data);
+      } catch {
+        /* Keep usable settings if storage is unavailable. */
+      }
+    }
     return parsed.success ? parsed.data : structuredClone(defaults);
   } catch {
     return structuredClone(defaults);

@@ -25,7 +25,7 @@ const SkillSchema = z
 export const MechanicsSchema = z
   .object({
     version: z.string().min(1),
-    skills: z.array(SkillSchema).length(7),
+    skills: z.array(SkillSchema).length(SkillIdSchema.options.length),
   })
   .strict()
   .superRefine((config, ctx) => {

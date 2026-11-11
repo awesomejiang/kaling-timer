@@ -42,3 +42,4 @@ export interface ClientToServerEvents {
   ) => void;
 }
 export * from "./hotkeys.js";
+export * from "./permissions.js";

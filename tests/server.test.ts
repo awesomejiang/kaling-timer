@@ -74,7 +74,12 @@ it("enforces room authority over real sockets and restores host after disconnect
       code: session.code,
     });
     expect(joined.ok).toBe(true);
-    const version = joined.value.snapshot.version;
+    const assigned = await host.emitWithAck("room:assign", {
+      commandId: randomUUID(),
+      expectedVersion: joined.value.snapshot.version,
+      zone: "dog",
+    });
+    const version = assigned.value.version;
     const command = {
       commandId: randomUUID(),
       expectedVersion: version,
@@ -101,7 +106,7 @@ it("enforces room authority over real sockets and restores host after disconnect
       timing: { source: "button" },
     };
     expect((await member.emitWithAck("room:command", calibration)).error).toBe(
-      "HOST_ONLY",
+      "ZONE_ONLY",
     );
     await open(reconnected);
     const resumed = await reconnected.emitWithAck("room:resume", session);

@@ -3,11 +3,38 @@ import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { register, unregisterAll } from "@tauri-apps/plugin-global-shortcut";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { VoiceGrammar, VoiceDeduper, loadVoiceConfig } from "@kaling/voice";
-import { HotkeyActions } from "@kaling/shared";
+import {
+  HotkeyActions,
+  commandPermission,
+  canUseVoice,
+  SkillIdSchema,
+} from "@kaling/shared";
+import { mechanics } from "./mechanics";
 import source from "../../../config/voice-commands.yaml?raw";
 import { report, serverNow, sendAction, useApp, clock } from "./client";
 import type { AudioRuntime } from "./audio";
-export async function applyNativeSettings() {
+export async function refreshVoiceHints() {
+  const path = useApp.getState().settings.voiceConfigPath;
+  const text =
+    path && isTauri()
+      ? await invoke<string>("read_voice_config", { path })
+      : source;
+  const config = loadVoiceConfig(text);
+  const grammar = new VoiceGrammar(config);
+  useApp.setState({
+    voiceHints: Object.fromEntries(
+      SkillIdSchema.options.map((id) => [id, grammar.calibrationHints(id)]),
+    ),
+  });
+  return config;
+}
+let nativeSettingsTask: Promise<void> = Promise.resolve();
+export function applyNativeSettings() {
+  const task = nativeSettingsTask.then(updateNativeSettings);
+  nativeSettingsTask = task.catch(() => {});
+  return task;
+}
+async function updateNativeSettings() {
   if (!isTauri()) return;
   await getCurrentWindow().setAlwaysOnTop(
     useApp.getState().settings.alwaysOnTop,
@@ -19,10 +46,21 @@ export async function applyNativeSettings() {
       useApp.getState().settings.hotkeys,
     )) {
       if (!shortcut) continue;
+      if (!HotkeyActions[action]) throw new Error("未知快捷键动作");
+      const state = useApp.getState();
+      if (
+        !state.room ||
+        commandPermission(
+          state.room,
+          state.session?.memberId,
+          HotkeyActions[action],
+          mechanics.skills,
+        )
+      )
+        continue;
       if (used.has(shortcut.toLowerCase()))
         throw new Error(`快捷键重复：${shortcut}`);
       used.add(shortcut.toLowerCase());
-      if (!HotkeyActions[action]) throw new Error("未知快捷键动作");
       await register(shortcut, (event) => {
         if (event.state === "Pressed")
           sendAction(HotkeyActions[action], { source: "hotkey" }).catch(report);
@@ -34,7 +72,7 @@ export async function applyNativeSettings() {
   }
 }
 interface SpeechEvent {
-  kind: "ready" | "result" | "error";
+  kind: "ready" | "result" | "rejected" | "error";
   text?: string;
   onsetAt?: number | null;
   recognizedAt?: number;
@@ -51,6 +89,7 @@ export class VoiceRuntime {
   private context: AudioContext | null = null;
   private worklet: AudioWorkletNode | null = null;
   private generation = 0;
+  private inputMonitor: ReturnType<typeof setInterval> | null = null;
   constructor(private audio: AudioRuntime) {}
   async start() {
     try {
@@ -67,13 +106,9 @@ export class VoiceRuntime {
     const generation = ++this.generation;
     const sessionId = crypto.randomUUID();
     const s = useApp.getState();
-    if (s.session?.memberId !== s.room?.hostId) throw new Error("HOST_ONLY");
-    const text = s.settings.voiceConfigPath
-      ? await invoke<string>("read_voice_config", {
-          path: s.settings.voiceConfigPath,
-        })
-      : source;
-    this.grammar = new VoiceGrammar(loadVoiceConfig(text));
+    if (!s.room || !canUseVoice(s.room, s.session?.memberId))
+      throw new Error("请选择主区域后启用语音");
+    this.grammar = new VoiceGrammar(await refreshVoiceHints());
     this.stream = await navigator.mediaDevices.getUserMedia({
       audio: {
         deviceId: s.settings.inputDevice
@@ -84,6 +119,10 @@ export class VoiceRuntime {
         autoGainControl: true,
       },
       video: false,
+    });
+    useApp.setState({
+      micDevice: this.stream.getAudioTracks()[0]?.label ?? "系统默认麦克风",
+      voiceResult: "等待讲话",
     });
     this.context = new AudioContext({ sampleRate: 16000 });
     await this.context.audioWorklet.addModule(
@@ -98,8 +137,32 @@ export class VoiceRuntime {
     this.worklet.connect(mute).connect(this.context.destination);
     let ready = false;
     let writing = false;
+    let inputAt = 0;
+    let meterAt = 0;
+    this.inputMonitor = setInterval(() => {
+      if (ready && performance.now() - inputAt > 3000) {
+        useApp.setState({
+          mic: `监听中 · 未收到音频（${this.context?.state ?? "closed"}）`,
+        });
+      }
+    }, 1000);
     const queue: number[][] = [];
     this.worklet.port.onmessage = (event) => {
+      if (generation !== this.generation) return;
+      inputAt = performance.now();
+      if (inputAt - meterAt >= 250) {
+        const samples = event.data as Int16Array;
+        const rms =
+          Math.sqrt(
+            samples.reduce((sum, sample) => sum + sample * sample, 0) /
+              samples.length,
+          ) / 32768;
+        useApp.setState({
+          micLevel: Math.round(Math.min(1, rms * 5) * 100),
+          ...(ready ? { mic: "监听中 · 本地离线" } : {}),
+        });
+        meterAt = inputAt;
+      }
       if (!ready || generation !== this.generation) return;
       queue.push(Array.from(event.data as Int16Array));
       if (queue.length > 10) {
@@ -137,6 +200,15 @@ export class VoiceRuntime {
         this.stop().catch(report);
         return;
       }
+      if (value.kind === "rejected") {
+        useApp.setState({ voiceResult: "听到语音，但未匹配有效命令" });
+        return;
+      }
+      if (value.kind === "result") {
+        useApp.setState({
+          voiceResult: `${value.text ?? ""}（置信度 ${Math.round((value.confidence ?? 0) * 100)}%）`,
+        });
+      }
       const state = useApp.getState(),
         now = serverNow();
       if (
@@ -146,7 +218,6 @@ export class VoiceRuntime {
         now === null ||
         !state.synced ||
         !state.room ||
-        state.session?.memberId !== state.room.hostId ||
         (value.confidence ?? 0) < 0.7
       )
         return;
@@ -158,7 +229,23 @@ export class VoiceRuntime {
       if (!this.deduper.accept(value.id, value.text, onset ?? recognizedAt))
         return;
       const action = this.grammar.parse(value.text, state.room.battle.phase);
-      if (!action) return;
+      if (!action) {
+        useApp.setState({ voiceResult: "当前阶段没有匹配的明确命令" });
+        return;
+      }
+      if (
+        commandPermission(
+          state.room,
+          state.session?.memberId,
+          action,
+          mechanics.skills,
+        )
+      ) {
+        useApp.setState({
+          voiceResult: "命令无权限：P1 只能控制自己的区域，全队操作由房主执行",
+        });
+        return;
+      }
       sendAction(action, {
         source: "voice",
         recognizedAt: Math.round(recognizedAt),
@@ -181,6 +268,8 @@ export class VoiceRuntime {
   }
   async stop() {
     this.generation++;
+    if (this.inputMonitor) clearInterval(this.inputMonitor);
+    this.inputMonitor = null;
     this.unlisten?.();
     this.unlisten = null;
     this.stream?.getTracks().forEach((t) => t.stop());
@@ -190,6 +279,6 @@ export class VoiceRuntime {
     await this.context?.close();
     this.context = null;
     if (isTauri()) await invoke("stop_speech");
-    useApp.setState({ mic: "关闭" });
+    useApp.setState({ mic: "关闭", micLevel: 0 });
   }
 }

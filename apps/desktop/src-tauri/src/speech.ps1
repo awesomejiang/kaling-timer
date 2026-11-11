@@ -35,8 +35,52 @@ try {
   $builder.Append($choices)
   $engine.LoadGrammar((New-Object System.Speech.Recognition.Grammar($builder)))
   $format = New-Object System.Speech.AudioFormat.SpeechAudioFormatInfo(16000, [System.Speech.AudioFormat.AudioBitsPerSample]::Sixteen, [System.Speech.AudioFormat.AudioChannel]::Mono)
-  $engine.SetInputToAudioStream([Console]::OpenStandardInput(), $format)
+  # SAPI queries Length and Position even for a live, forward-only PCM stream.
+  # Console's pipe throws for these properties; track bytes without retaining audio.
+  Add-Type -TypeDefinition @'
+using System;
+using System.IO;
+public sealed class KalingPcmStream : Stream {
+  private readonly Stream input;
+  private long position;
+  public KalingPcmStream(Stream input) { this.input = input; }
+  public override bool CanRead { get { return true; } }
+  public override bool CanSeek { get { return false; } }
+  public override bool CanWrite { get { return false; } }
+  public override long Length { get { return long.MaxValue; } }
+  public override long Position {
+    get { return position; }
+    set { Seek(value, SeekOrigin.Begin); }
+  }
+  public override int Read(byte[] buffer, int offset, int count) {
+    // COM treats a short read as end-of-stream; pipe chunks are not EOF.
+    int total = 0;
+    while (total < count) {
+      int read = input.Read(buffer, offset + total, count - total);
+      if (read == 0) break;
+      position += read;
+      total += read;
+    }
+    return total;
+  }
+  public override long Seek(long offset, SeekOrigin origin) {
+    if ((origin == SeekOrigin.Current && offset == 0) ||
+        (origin == SeekOrigin.Begin && offset == position)) return position;
+    throw new NotSupportedException("Live PCM cannot be rewound.");
+  }
+  public override void Flush() { }
+  public override void SetLength(long value) { throw new NotSupportedException(); }
+  public override void Write(byte[] buffer, int offset, int count) { throw new NotSupportedException(); }
+  protected override void Dispose(bool disposing) {
+    if (disposing) input.Dispose();
+    base.Dispose(disposing);
+  }
+}
+'@
+  $pcmStream = New-Object KalingPcmStream([Console]::OpenStandardInput())
+  $engine.SetInputToAudioStream($pcmStream, $format)
   Register-ObjectEvent -InputObject $engine -EventName SpeechRecognized -SourceIdentifier KalingRecognized | Out-Null
+  Register-ObjectEvent -InputObject $engine -EventName SpeechRecognitionRejected -SourceIdentifier KalingRejected | Out-Null
   Register-ObjectEvent -InputObject $engine -EventName RecognizeCompleted -SourceIdentifier KalingCompleted | Out-Null
   $started = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
   Emit @{ kind = 'ready' }
@@ -44,6 +88,7 @@ try {
   while ($true) {
     $event = Wait-Event
     if ($event.SourceIdentifier -eq 'KalingCompleted') { break }
+    if ($event.SourceIdentifier -eq 'KalingRejected') { Emit @{ kind = 'rejected' } }
     if ($event.SourceIdentifier -eq 'KalingRecognized') {
       $r = $event.SourceEventArgs.Result
       $onset = $null

@@ -2,7 +2,8 @@
 
 Windows 10/11 multiplayer companion timer for MapleStory Kaling. Requirements:
 [Kaling_Timer_PRD.md](Kaling_Timer_PRD.md). No game detection, automation, or burst
-recommendations. Phases and actual casts are confirmed by the host.
+recommendations. The host confirms phases; P1 zone members confirm their own
+zone's casts, while the host controls P2/P3 timers.
 
 ## Implementation and verification
 
@@ -17,7 +18,7 @@ recommendations. Phases and actual casts are confirmed by the host.
 - Milestone 5: external no-wake-word grammar, Chinese numerals, compensation/dedup,
   Windows offline System.Speech bridge and configurable global shortcuts. The native
   integration needs the Windows acceptance run.
-- Milestone 6: compact dark UI, settings/devices/subscriptions, native tray/hide,
+- Milestone 6: compact dark UI, settings/devices/per-skill reminders, native tray/hide,
   always-on-top, Windows Credential Manager reconnect storage, NSIS configuration,
   CI and deployment docs. Windows packaging and game-focus behavior remain unverified.
 
@@ -40,7 +41,8 @@ npm run dev
 ```
 
 The server listens on 3001, Vite on 1420 and proxies Socket.IO. Create a room in
-the shell, assign a primary zone, then start and calibrate as host. `GET /health`
+the shell, assign a primary zone, then start as host and calibrate your own P1
+zone's timers. `GET /health`
 returns protocol/mechanics version and server time. Shared edits always go through
 the server. Disconnects display projected deadlines and disable shared mutations.
 Stop dev services with Ctrl+C.
@@ -72,7 +74,7 @@ battle start, but unknown recurring first activations require calibration and
 tiger requires each explicit trigger. P2 unknown first activations also require
 calibration. Selecting P3 never starts its full-screen timer.
 
-After explicit `三兽死亡`, P3 uses a configured initial delay if present. Otherwise
+After explicit `三凶兽死亡`, P3 uses a configured initial delay if present. Otherwise
 that event is an explicit calibrated reference and the next prediction is
 reference + difficulty cooldown (60s E/N, 30s H/EX); the UI labels this basis and
 continues to state that the actual first delay is unknown. It is not an observed
@@ -94,11 +96,39 @@ are resolved only in that phase. Voice numbers default to 0–120 (editable up t
 explicit trigger mapping. Duplicate results are rejected, and speakers use input
 AEC plus strict command grammar; verify your driver in the Windows acceptance run.
 
+P1 members control their own primary zone's skill/zone calibration, shifts and
+undo; tiger members trigger the 30-second single-shot. Both members in a zone may
+operate the shared timer, with stale concurrent commands rejected. Host status
+does not grant cross-zone control. Battle lifecycle and P2/P3 timer controls remain
+host-only. Buttons, voice and shortcuts share these server-enforced permissions.
+
 Local settings include per-skill lead times plus 5,4,3,2,1 countdown capability,
-extra P1 zone subscriptions (no slot consumption), P2/P3 team subscriptions,
+P1 assigned-zone audio only and P2/P3 team audio by default,
 volume/mute/devices, conflict window/tie priority, compensation, hotkeys and
 always-on-top. They contain no secrets. Windows saves reconnect credentials in
 Credential Manager; browser tokens remain in page memory only.
+Saved extra-zone audio subscriptions from earlier versions are discarded while
+preserving other valid local settings.
+Global hotkeys are blank by default and only registered after you configure them.
+Upgrading from the pre-opt-in version clears saved bindings once; subsequent
+manually configured bindings are preserved.
+Local reminders and voice each have one toggle, highlighted when running. Both
+default on in the native app after entering a room (P1 members need an assigned
+zone for voice). A manually disabled toggle stays off across restarts. Microphone
+permission still requires the user's approval; failures appear in the status area.
+The default native window is 760×900 with a two-column timer layout. Microphone
+diagnostics start collapsed. Every skill shows valid voice calibration examples
+from the active command configuration (tiger shows its manual trigger phrase).
+
+The separate transparent overlay opens by default. P1 shows only your assigned
+zone; P2/P3 show team timers. Drag its top bar and resize its edges. Use the main
+window's “悬浮窗” button to show/hide it and “锁定悬浮窗” to pass mouse input
+through it. Unlock using “解锁悬浮窗” in the main window or “解锁悬浮窗”
+in the tray menu. Background opacity is configurable in Local Settings.
+The main window continues recognition, reminders and room synchronization even
+when hidden; the overlay receives display-only snapshots without session tokens
+and does not start another microphone, audio scheduler or server connection.
+Fullscreen/game-focus overlay visibility still needs MapleStory validation.
 
 See [server deployment](docs/deployment.md) for Compose persistence, TLS, CSP,
 origins, backups, rate limits, mechanics versioning and operational limits.

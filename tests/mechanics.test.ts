@@ -14,6 +14,7 @@ describe("PRD mechanics configuration", () => {
     ["p1_tiger_pillars", 30, 30],
     ["p1_dog_minigame", 60, 60],
     ["p2_kaling_flight", 18, 18],
+    ["p2_kaling_scroll", 30, 30],
     ["p2_kaling_minigame", 60, 60],
     ["p3_fullscreen", 60, 30],
   ])("%s has all four difficulty values", (id, en, hx) => {

@@ -13,6 +13,7 @@ import { initialBattle, reduceBattle } from "@kaling/timer-engine";
 import {
   RoomSnapshotSchema,
   eventTime,
+  commandPermission,
   type Command,
   type Difficulty,
   type RoomSnapshot,
@@ -55,6 +56,15 @@ export class RoomStore {
       .get(code);
     if (!row) throw new Error("ROOM_NOT_FOUND");
     const stored = JSON.parse(row.data as string) as StoredRoom;
+    if (
+      stored.snapshot.mechanicsVersion === "1.0.0" &&
+      this.mechanics.version === "1.1.0"
+    ) {
+      stored.snapshot.battle.timers.p2_kaling_scroll ??= initialBattle(
+        stored.snapshot.battle.difficulty,
+      ).timers.p2_kaling_scroll;
+      stored.snapshot.mechanicsVersion = this.mechanics.version;
+    }
     stored.snapshot = RoomSnapshotSchema.parse(stored.snapshot);
     if (stored.snapshot.mechanicsVersion !== this.mechanics.version)
       throw new Error("MECHANICS_VERSION_MISMATCH");
@@ -272,7 +282,13 @@ export class RoomStore {
       input,
       (room) => {
         const s = room.snapshot;
-        if (s.hostId !== session.memberId) throw new Error("HOST_ONLY");
+        const denied = commandPermission(
+          s,
+          session.memberId,
+          input.action,
+          this.mechanics.skills,
+        );
+        if (denied) throw new Error(denied);
         const at = eventTime(input.timing, receivedAt);
         if (
           s.battle.phase !== "lobby" &&

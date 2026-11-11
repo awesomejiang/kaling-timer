@@ -89,6 +89,15 @@ describe("deterministic lifecycle and calibration", () => {
     expect(s.timers.p2_kaling_minigame).toEqual(before);
     expect(project(s, mechanics, "p2_kaling_minigame", 71000)?.at).toBe(130000);
   });
+  it("anchors the P2 scroll cooldown to each confirmed cast", () => {
+    const skill = "p2_kaling_scroll";
+    const p2 = apply(start(), { type: "phase", phase: "p2" });
+    expect(project(p2, mechanics, skill, 11000)).toBeNull();
+    const first = apply(p2, { type: "calibrate", skill }, 12000);
+    expect(project(first, mechanics, skill, 13000)?.at).toBe(42000);
+    const next = apply(first, { type: "calibrate", skill }, 47000);
+    expect(project(next, mechanics, skill, 48000)?.at).toBe(77000);
+  });
   it("interprets remaining seconds at spoken time, compensates once, and undoes from absolute history", () => {
     const ref = eventTime(
       {

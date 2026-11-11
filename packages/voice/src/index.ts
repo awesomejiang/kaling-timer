@@ -21,9 +21,16 @@ export const VoiceConfigSchema = z
   .object({
     version: z.literal(1),
     maxSeconds: z.number().int().min(1).max(300),
-    aliases: z.record(
-      SkillIdSchema,
-      z.array(z.string().min(1).max(30)).min(1).max(10),
+    aliases: z.preprocess(
+      (aliases) => {
+        if (!aliases || typeof aliases !== "object" || Array.isArray(aliases))
+          return aliases;
+        return { p2_kaling_scroll: ["卡琳画卷", "画卷"], ...aliases };
+      },
+      z.record(
+        SkillIdSchema,
+        z.array(z.string().min(1).max(30)).min(1).max(10),
+      ),
     ),
     templates: z.array(TemplateSchema).min(1).max(20),
     commands: z
@@ -110,6 +117,7 @@ function action(
   }
 }
 const escape = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+const normalizeStart = (text: string) => text.replaceAll("开始", "校准");
 export class VoiceGrammar {
   readonly config: VoiceConfig;
   private matchers: {
@@ -134,7 +142,7 @@ export class VoiceGrammar {
             )
             .join("");
           this.matchers.push({
-            regex: new RegExp(`^${pattern}$`),
+            regex: new RegExp(`^${normalizeStart(pattern)}$`),
             operation: t.operation,
             skill: skill as SkillId,
             hasNumber: t.pattern.includes("{seconds}"),
@@ -142,12 +150,13 @@ export class VoiceGrammar {
         }
   }
   parse(text: string, phase: Phase): Action | null {
+    const normalized = normalizeStart(text);
     const matches: Action[] = this.config.commands
-      .filter((c) => c.utterance === text)
+      .filter((c) => normalizeStart(c.utterance) === normalized)
       .map((c) => c.action);
     for (const m of this.matchers) {
       if (!m.skill.startsWith(phase + "_")) continue;
-      const match = m.regex.exec(text);
+      const match = m.regex.exec(normalized);
       if (!match) continue;
       const n = m.hasNumber ? parseNumber(match[1]) : 0;
       if (n === null || n > this.config.maxSeconds) continue;
@@ -170,7 +179,60 @@ export class VoiceGrammar {
               for (const num of numberWords(n))
                 phrases.add(base.replace("{seconds}", num));
         }
-    return [...phrases];
+    return [
+      ...new Set(
+        [...phrases].flatMap((text) => [
+          text,
+          normalizeStart(text),
+          text.replaceAll("校准", "开始"),
+        ]),
+      ),
+    ];
+  }
+  calibrationHints(skill: SkillId): string[] {
+    const phase = skill.split("_")[0] as Phase;
+    if (skill === "p1_tiger_pillars") {
+      const command = [...this.config.commands]
+        .sort((a, b) => a.utterance.length - b.utterance.length)
+        .find((c) => this.parse(c.utterance, phase)?.type === "trigger-tiger");
+      return command ? [command.utterance] : [];
+    }
+    for (const operation of ["cast", "remaining"] as const) {
+      const remaining = Math.min(50, this.config.maxSeconds);
+      const candidates = this.config.commands
+        .filter(
+          (c) =>
+            c.action.type === "calibrate" &&
+            c.action.skill === skill &&
+            (operation === "cast"
+              ? c.action.remainingSeconds === undefined
+              : c.action.remainingSeconds === remaining),
+        )
+        .map((c) => c.utterance);
+      for (const alias of this.config.aliases[skill])
+        for (const template of this.config.templates.filter(
+          (t) => t.operation === operation,
+        ))
+          candidates.push(
+            template.pattern
+              .replace("{skill}", alias)
+              .replace("{seconds}", String(remaining)),
+          );
+      const valid = candidates
+        .sort((a, b) => a.length - b.length)
+        .find((text) => {
+          const parsed = this.parse(text, phase);
+          return (
+            parsed?.type === "calibrate" &&
+            parsed.skill === skill &&
+            (operation === "cast"
+              ? parsed.remainingSeconds === undefined
+              : parsed.remainingSeconds === remaining)
+          );
+        });
+      if (valid) return [valid];
+    }
+    return [];
   }
 }
 export class VoiceDeduper {

@@ -16,7 +16,8 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run --exclude '**/e2e/**'",
     "desktop": "npm run tauri -w @kaling/desktop -- dev",
-    "test:e2e": "playwright test"
+    "test:e2e": "playwright test",
+    "test:windows:speech": "node --import tsx scripts/windows-speech-smoke.mjs"
   },
   "devDependencies": {
     "@playwright/test": "^1.65.0",
@@ -25,6 +26,6 @@
     "prettier": "^3.9.10",
     "tsx": "^4.20.6",
     "typescript": "~5.9.3",
-    "vitest": "^3.2.4"
+    "vitest": "^4.1.12"
   }
 }

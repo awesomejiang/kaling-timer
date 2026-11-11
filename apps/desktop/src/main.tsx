@@ -5,6 +5,8 @@ import {
   DifficultySchema,
   ZoneSchema,
   HotkeyActions,
+  commandPermission,
+  canUseVoice,
   type Action,
   type Difficulty,
   type SkillId,
@@ -25,10 +27,57 @@ import {
   settingsUpdate,
 } from "./client";
 import { AudioRuntime } from "./audio";
-import { VoiceRuntime, applyNativeSettings } from "./native";
+import { VoiceRuntime, applyNativeSettings, refreshVoiceHints } from "./native";
 import "./style.css";
+import { Overlay, useOverlayBridge } from "./overlay";
 const audio = new AudioRuntime(mechanics),
   voice = new VoiceRuntime(audio);
+let featureQueue: Promise<void> = Promise.resolve();
+let audioConfig = "",
+  voiceConfig = "";
+function syncLocalFeatures() {
+  const task = featureQueue.then(async () => {
+    if (!isTauri()) return;
+    const s = useApp.getState();
+    const audioKey = JSON.stringify([
+      s.settings.outputDevice,
+      s.settings.leads,
+    ]);
+    const voiceKey = JSON.stringify([
+      s.room?.code,
+      s.session?.memberId,
+      s.settings.inputDevice,
+      s.settings.voiceConfigPath,
+    ]);
+    const wantAudio = !!s.room && s.settings.remindersEnabled;
+    const wantVoice =
+      !!s.room &&
+      s.settings.voiceEnabled &&
+      canUseVoice(s.room, s.session?.memberId);
+    if (!wantVoice || voiceConfig !== voiceKey) await voice.stop();
+    if (!wantAudio || audioConfig !== audioKey) audio.stop();
+    audioConfig = audioKey;
+    voiceConfig = voiceKey;
+    if (wantAudio && useApp.getState().audio !== "已启用") {
+      try {
+        await audio.enable();
+      } catch (error) {
+        audio.stop();
+        report(error);
+      }
+    }
+    if (wantVoice) {
+      try {
+        if (useApp.getState().mic === "关闭") await voice.start();
+        else await audio.prepareAcknowledgement();
+      } catch (error) {
+        report(error);
+      }
+    }
+  });
+  featureQueue = task.catch(report);
+  return featureQueue;
+}
 const names = { bird: "鸟", tiger: "虎", dog: "狗" };
 const difficultyNames = {
   easy: "简单",
@@ -40,7 +89,7 @@ const actionNames: Record<Action["type"], string> = {
   start: "开始战斗",
   reset: "重置战斗",
   phase: "切换阶段",
-  "last-peril-death": "三兽死亡",
+  "last-peril-death": "三凶兽死亡",
   "trigger-tiger": "虎柱子开始",
   difficulty: "难度调整",
   calibrate: "技能校准",
@@ -162,15 +211,16 @@ function Admission() {
 function TimerCard({
   id,
   now,
-  host,
+  control,
   editable,
 }: {
   id: SkillId;
   now: number;
-  host: boolean;
+  control: boolean;
   editable: boolean;
 }) {
   const room = useApp((s) => s.room)!;
+  const voiceHints = useApp((s) => s.voiceHints[id]);
   const config = mechanics.skills.find((s) => s.id === id)!,
     timer = room.battle.timers[id];
   const next = project(room.battle, mechanics, id, now),
@@ -179,7 +229,16 @@ function TimerCard({
   return (
     <article className="timer">
       <div className="timer-title">
-        <h3>{config.name}</h3>
+        <div className="skill-heading">
+          <h3>{config.name}</h3>
+          <small
+            className="voice-hint"
+            title="不带秒数表示刚刚施放；带秒数表示距离下一次激活的剩余时间"
+          >
+            语音：
+            {voiceHints?.length ? voiceHints.join(" / ") : "未配置校准口令"}
+          </small>
+        </div>
         <span>
           {config.cooldownSeconds[room.battle.difficulty]}s ·{" "}
           {config.mode === "fixed-cycle"
@@ -200,14 +259,16 @@ function TimerCard({
           : config.startEvent === "manual-trigger"
             ? "等待手动触发"
             : id === "p3_fullscreen" && room.battle.lastPerilDeathAt === null
-              ? "等待“三兽死亡”事件"
+              ? "等待“三凶兽死亡”事件"
               : timer.firstAt === null
-                ? "首轮延迟未配置 · 需要房主校准"
+                ? config.phase === "p1"
+                  ? "首轮延迟未配置 · 需要本区成员校准"
+                  : "首轮延迟未配置 · 需要房主校准"
                 : "本次倒计时已结束"}
       </p>
       {timer.basis === "last-peril-reference" && (
         <small>
-          以三兽死亡作校准参考，下一次 = 参考 + 冷却；首轮延迟仍未知。
+          以三凶兽死亡作校准参考，下一次 = 参考 + 冷却；首轮延迟仍未知。
         </small>
       )}
       {timer.confirmedAt !== null && (
@@ -215,7 +276,7 @@ function TimerCard({
           上次确认施法：{new Date(timer.confirmedAt).toLocaleTimeString()}
         </small>
       )}
-      {host && (
+      {control && (
         <fieldset disabled={!editable}>
           <legend>{config.name}校准</legend>
           {config.mode === "manual-one-shot" ? (
@@ -409,7 +470,7 @@ function Room({ now }: { now: number }) {
                 }
                 onClick={() => perform({ type: "last-peril-death" })}
               >
-                三兽死亡
+                三凶兽死亡
               </button>
               <button
                 className="danger"
@@ -418,30 +479,34 @@ function Room({ now }: { now: number }) {
                 重置战斗
               </button>
             </div>
-            {room.battle.phase === "p1" &&
-              ZoneSchema.options.map((zone) => (
-                <div className="row" key={zone}>
-                  <span>
-                    {names[zone]}区参考{" "}
-                    {room.battle.zoneStartAt[zone] === null
-                      ? "—"
-                      : new Date(
-                          room.battle.zoneStartAt[zone]!,
-                        ).toLocaleTimeString()}
-                  </span>
-                  <button
-                    onClick={() => perform({ type: "calibrate-zone", zone })}
-                  >
-                    {names[zone]}区域校准
-                  </button>
-                  <button
-                    disabled={!room.battle.zoneHistory[zone].length}
-                    onClick={() => perform({ type: "undo-zone", zone })}
-                  >
-                    撤销
-                  </button>
-                </div>
-              ))}
+          </fieldset>
+        )}
+        {room.battle.phase === "p1" && member?.zone && (
+          <fieldset disabled={!editable}>
+            <legend>本区计时控制（同区成员共享）</legend>
+            {[member.zone].map((zone) => (
+              <div className="row" key={zone}>
+                <span>
+                  {names[zone]}区参考{" "}
+                  {room.battle.zoneStartAt[zone] === null
+                    ? "—"
+                    : new Date(
+                        room.battle.zoneStartAt[zone]!,
+                      ).toLocaleTimeString()}
+                </span>
+                <button
+                  onClick={() => perform({ type: "calibrate-zone", zone })}
+                >
+                  {names[zone]}区域校准
+                </button>
+                <button
+                  disabled={!room.battle.zoneHistory[zone].length}
+                  onClick={() => perform({ type: "undo-zone", zone })}
+                >
+                  撤销
+                </button>
+              </div>
+            ))}
           </fieldset>
         )}
         {!s.connected && (
@@ -473,7 +538,16 @@ function Room({ now }: { now: number }) {
                 key={skill.id}
                 id={skill.id}
                 now={now}
-                host={host}
+                control={
+                  commandPermission(
+                    room,
+                    s.session?.memberId,
+                    skill.mode === "manual-one-shot"
+                      ? { type: "trigger-tiger" }
+                      : { type: "calibrate", skill: skill.id },
+                    mechanics.skills,
+                  ) === null
+                }
                 editable={editable}
               />
             ))}
@@ -560,6 +634,22 @@ function SettingsPanel() {
             onChange={(e) => settingsUpdate({ volume: Number(e.target.value) })}
           />
         </label>
+        <label>
+          悬浮窗背景不透明度 {Math.round(settings.overlayOpacity * 100)}%
+          <input
+            type="range"
+            min={0.15}
+            max={1}
+            step={0.05}
+            value={settings.overlayOpacity}
+            onChange={(event) =>
+              settingsUpdate({ overlayOpacity: Number(event.target.value) })
+            }
+          />
+        </label>
+        <p className="muted">
+          锁定后，鼠标可直接操作后面的游戏。可在主窗口或托盘选择“解锁悬浮窗”。
+        </p>
         <button onClick={() => devicesRefresh().catch(report)}>
           授权并刷新设备
         </button>
@@ -571,8 +661,6 @@ function SettingsPanel() {
                 kind === "input" ? settings.inputDevice : settings.outputDevice
               }
               onChange={(e) => {
-                audio.stop();
-                voice.stop().catch(report);
                 settingsUpdate(
                   kind === "input"
                     ? { inputDevice: e.target.value }
@@ -616,7 +704,7 @@ function SettingsPanel() {
           />
         </label>
         <p className="muted">
-          修改语法或输入设备后重新启用语音。完整句式、无唤醒词；建议使用耳机，输入启用回声消除。
+          修改语法或输入设备后自动应用。完整句式、无唤醒词；建议使用耳机，输入启用回声消除。
         </p>
         <label>
           音频冲突窗口（秒）
@@ -644,25 +732,6 @@ function SettingsPanel() {
             <option value="p1_bird_flight">鸟飞行</option>
           </select>
         </label>
-        <fieldset>
-          <legend>P1 额外区域订阅（不占主区域名额）</legend>
-          {ZoneSchema.options.map((zone) => (
-            <label key={zone}>
-              <input
-                type="checkbox"
-                checked={settings.extraZones.includes(zone)}
-                onChange={(e) =>
-                  settingsUpdate({
-                    extraZones: e.target.checked
-                      ? [...settings.extraZones, zone]
-                      : settings.extraZones.filter((z) => z !== zone),
-                  })
-                }
-              />
-              {names[zone]}
-            </label>
-          ))}
-        </fieldset>
         <fieldset>
           <legend>每技能提醒（启用时始终包含 5、4、3、2、1）</legend>
           {mechanics.skills.map((skill) => (
@@ -695,7 +764,6 @@ function SettingsPanel() {
                       settingsUpdate({
                         leads: { ...settings.leads, [skill.id]: values },
                       });
-                      audio.stop();
                     } catch (error) {
                       report(error);
                     }
@@ -707,6 +775,7 @@ function SettingsPanel() {
         </fieldset>
         <fieldset>
           <legend>全局快捷键（MapleStory 聚焦时也有效）</legend>
+          <p className="muted">默认不绑定快捷键。需要时填写，留空即禁用。</p>
           {Object.entries(settings.hotkeys).map(([key, value]) => (
             <label key={key}>
               {hotkeyLabel(key)}
@@ -735,15 +804,45 @@ function SettingsPanel() {
   );
 }
 function App() {
+  useOverlayBridge();
   const s = useApp(),
     [now, setNow] = useState(Date.now());
   useEffect(() => {
     connect().catch(report);
-    applyNativeSettings().catch(report);
     const id = setInterval(() => setNow(serverNow() ?? Date.now()), 100);
     return () => clearInterval(id);
   }, []);
-  const host = !!s.room && s.session?.memberId === s.room.hostId;
+  const memberZone = s.room?.members.find(
+    (m) => m.id === s.session?.memberId,
+  )?.zone;
+  useEffect(() => {
+    applyNativeSettings().catch(report);
+  }, [
+    s.room?.code,
+    s.room?.hostId,
+    s.room?.battle.phase,
+    s.session?.memberId,
+    memberZone,
+  ]);
+  const voiceAllowed = !!s.room && canUseVoice(s.room, s.session?.memberId);
+  useEffect(() => {
+    refreshVoiceHints().catch(report);
+  }, [s.settings.voiceConfigPath]);
+  useEffect(() => {
+    syncLocalFeatures();
+  }, [
+    s.room?.code,
+    s.session?.memberId,
+    voiceAllowed,
+    s.settings.remindersEnabled,
+    s.settings.voiceEnabled,
+    s.settings.inputDevice,
+    s.settings.outputDevice,
+    s.settings.voiceConfigPath,
+    s.settings.leads,
+  ]);
+  const audioOn = s.audio === "已启用";
+  const voiceOn = s.mic.startsWith("监听中");
   return (
     <main
       className={
@@ -767,6 +866,16 @@ function App() {
         <span>麦克风：{s.mic}</span>
         <span>音频：{s.audio}</span>
       </div>
+      {s.mic !== "关闭" && (
+        <details className="voice-diagnostics">
+          <summary>麦克风与识别详情</summary>
+          <p className="muted">
+            麦克风设备：{s.micDevice || "准备中"} · 输入电平 {s.micLevel}%
+            <br />
+            最近识别：{s.voiceResult || "等待讲话"}
+          </p>
+        </details>
+      )}
       {s.error && (
         <div role="alert" className="error">
           {s.error}
@@ -780,23 +889,44 @@ function App() {
       )}
       <div className="buttons">
         <button
+          aria-pressed={audioOn}
+          className={audioOn ? "toggle-active" : ""}
+          disabled={!isTauri() || !s.room}
           onClick={() =>
-            audio.enable().catch((error) => {
-              audio.stop();
-              report(error);
-            })
+            settingsUpdate({ remindersEnabled: !s.settings.remindersEnabled })
           }
         >
-          启用本地提醒
+          本地提醒
         </button>
-        <button onClick={() => audio.stop()}>停止提醒</button>
         <button
-          disabled={!host || !s.connected}
-          onClick={() => voice.start().catch(report)}
+          aria-pressed={voiceOn}
+          className={voiceOn ? "toggle-active" : ""}
+          disabled={!isTauri() || !voiceAllowed || !s.connected}
+          onClick={() =>
+            settingsUpdate({ voiceEnabled: !s.settings.voiceEnabled })
+          }
         >
-          启用语音
+          语音识别
         </button>
-        <button onClick={() => voice.stop().catch(report)}>停止语音</button>
+        <button
+          disabled={!isTauri()}
+          aria-pressed={s.settings.overlayEnabled}
+          className={s.settings.overlayEnabled ? "toggle-active" : ""}
+          onClick={() =>
+            settingsUpdate({ overlayEnabled: !s.settings.overlayEnabled })
+          }
+        >
+          悬浮窗
+        </button>
+        <button
+          disabled={!isTauri() || !s.settings.overlayEnabled}
+          aria-pressed={s.settings.overlayLocked}
+          onClick={() =>
+            settingsUpdate({ overlayLocked: !s.settings.overlayLocked })
+          }
+        >
+          {s.settings.overlayLocked ? "解锁悬浮窗" : "锁定悬浮窗"}
+        </button>
       </div>
       {!isTauri() && (
         <p className="muted">
@@ -816,4 +946,8 @@ function App() {
     </main>
   );
 }
-createRoot(document.getElementById("root")!).render(<App />);
+const overlayMode = new URLSearchParams(location.search).get("overlay") === "1";
+if (overlayMode) document.documentElement.classList.add("overlay-mode");
+createRoot(document.getElementById("root")!).render(
+  overlayMode ? <Overlay /> : <App />,
+);

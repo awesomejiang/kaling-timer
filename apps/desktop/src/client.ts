@@ -4,6 +4,7 @@ import { isTauri, invoke } from "@tauri-apps/api/core";
 import { ClockSync } from "@kaling/timer-engine";
 import {
   ResumeSchema,
+  commandPermission,
   RoomSnapshotSchema,
   type Action,
   type InputTiming,
@@ -29,6 +30,10 @@ interface State {
   settings: Settings;
   pending: Command | null;
   mic: string;
+  micDevice: string;
+  micLevel: number;
+  voiceResult: string;
+  voiceHints: Partial<Record<import("@kaling/shared").SkillId, string[]>>;
   audio: string;
   syncErrorMs: number;
   audioLatenessMs: number;
@@ -42,6 +47,10 @@ export const useApp = create<State>(() => ({
   settings: readSettings(),
   pending: null,
   mic: "关闭",
+  micDevice: "",
+  micLevel: 0,
+  voiceResult: "",
+  voiceHints: {},
   audio: "未启用",
   syncErrorMs: Infinity,
   audioLatenessMs: 0,
@@ -205,7 +214,13 @@ export async function sendAction(
 ) {
   const s = useApp.getState();
   if (!socket?.connected || !s.synced || !s.room) throw new Error("OFFLINE");
-  if (s.session?.memberId !== s.room.hostId) throw new Error("HOST_ONLY");
+  const denied = commandPermission(
+    s.room,
+    s.session?.memberId,
+    action,
+    mechanics.skills,
+  );
+  if (denied) throw new Error(denied);
   if (s.pending) throw new Error("等待上一条命令确认");
   useApp.setState({
     pending: {

@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, it } from "vitest";
 import { loadMechanics } from "@kaling/mechanics";
-import type { Action, Session } from "@kaling/shared";
+import { canUseVoice, type Action, type Session } from "@kaling/shared";
 import { RoomStore } from "../apps/server/src/rooms.js";
 const mechanics = loadMechanics(
   readFileSync(new URL("../config/mechanics.yaml", import.meta.url), "utf8"),
@@ -72,7 +72,7 @@ it("enforces host authority, assignments, stale versions, idempotency and durabl
       "UNAUTHORIZED",
     );
     s = store.command(
-      h,
+      b,
       cmd(s.version, { type: "calibrate", skill: "p1_dog_minigame" }),
       20000,
     );
@@ -124,5 +124,80 @@ it("retries admission commands without duplicate rooms or members and persists t
   } finally {
     store.close();
     rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+it("allows both P1 zone members to control their timers without a host override", () => {
+  const store = new RoomStore(mechanics);
+  try {
+    const host = store.create("bird host", "", "normal").session;
+    const bird = store.join(host.code, "second bird", "").session;
+    const dog = store.join(host.code, "dog", "").session;
+    const tiger = store.join(host.code, "tiger", "").session;
+    const unassigned = store.join(host.code, "unassigned", "").session;
+    let s = store.resume(host);
+    for (const [session, zone] of [
+      [host, "bird"],
+      [bird, "bird"],
+      [dog, "dog"],
+      [tiger, "tiger"],
+    ] as const)
+      s = store.assign(session, {
+        commandId: randomUUID(),
+        expectedVersion: s.version,
+        zone,
+      });
+    const run = (session: Session, action: Action) => {
+      s = store.command(session, cmd(s.version, action), 20000);
+      return s;
+    };
+    run(host, { type: "start" });
+    expect(canUseVoice(s, dog.memberId)).toBe(true);
+    expect(canUseVoice(s, unassigned.memberId)).toBe(false);
+    const dogActions: Action[] = [
+      { type: "calibrate", skill: "p1_dog_minigame", remainingSeconds: 50 },
+      { type: "shift", skill: "p1_dog_minigame", seconds: 5 },
+      { type: "undo-skill", skill: "p1_dog_minigame" },
+      { type: "calibrate-zone", zone: "dog" },
+      { type: "undo-zone", zone: "dog" },
+    ];
+    for (const action of dogActions) {
+      for (const session of [host, bird, tiger, unassigned])
+        expect(() => run(session, action)).toThrow("ZONE_ONLY");
+      run(dog, action);
+    }
+    for (const skill of ["p1_bird_scroll", "p1_bird_flight"] as const) {
+      run(host, { type: "calibrate", skill });
+      const stale = cmd(s.version, { type: "shift", skill, seconds: 2 });
+      run(bird, { type: "shift", skill, seconds: 5 });
+      expect(() => store.command(host, stale, 20000)).toThrow("STALE_VERSION");
+      run(host, { type: "undo-skill", skill });
+    }
+    expect(() => run(host, { type: "trigger-tiger" })).toThrow("ZONE_ONLY");
+    run(tiger, { type: "trigger-tiger" });
+    run(tiger, { type: "undo-skill", skill: "p1_tiger_pillars" });
+    for (const action of [
+      { type: "reset" },
+      { type: "phase", phase: "p2" },
+      { type: "last-peril-death" },
+      { type: "difficulty", difficulty: "hard" },
+    ] as Action[])
+      expect(() => run(dog, action)).toThrow("HOST_ONLY");
+    s = store.assign(dog, {
+      commandId: randomUUID(),
+      expectedVersion: s.version,
+      zone: "tiger",
+    });
+    expect(() => run(dog, dogActions[0])).toThrow("ZONE_ONLY");
+    run(dog, { type: "trigger-tiger" });
+    run(host, { type: "phase", phase: "p2" });
+    expect(canUseVoice(s, dog.memberId)).toBe(false);
+    expect(() =>
+      run(dog, { type: "calibrate", skill: "p2_kaling_flight" }),
+    ).toThrow("HOST_ONLY");
+    expect(() => run(tiger, { type: "trigger-tiger" })).toThrow("ZONE_ONLY");
+    run(host, { type: "calibrate", skill: "p2_kaling_flight" });
+  } finally {
+    store.close();
   }
 });

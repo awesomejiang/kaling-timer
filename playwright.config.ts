@@ -14,8 +14,13 @@ export default defineConfig({
   },
   webServer: {
     command: "npm run dev",
+    env: {
+      PORT: "3002",
+      VITE_SERVER_URL: "http://127.0.0.1:3002",
+      DATABASE_PATH: "../../test-results/e2e-rooms.sqlite",
+    },
     url: "http://127.0.0.1:1420",
-    reuseExistingServer: !process.env.CI,
+    reuseExistingServer: false,
     timeout: 30000,
   },
 });

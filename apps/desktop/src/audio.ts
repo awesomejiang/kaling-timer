@@ -112,9 +112,7 @@ export class AudioRuntime {
         (skill) =>
           !s.settings.disabledSkills.includes(skill.id) &&
           (skill.phase !== "p1" ||
-            (skill.zone !== null &&
-              (skill.zone === member?.zone ||
-                s.settings.extraZones.includes(skill.zone)))),
+            (skill.zone !== null && skill.zone === member?.zone)),
       )
       .map((skill) => skill.id);
     return {

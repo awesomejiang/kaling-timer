@@ -3,6 +3,10 @@
 These hardware/OS checks are outstanding until performed on Windows 10/11.
 The Linux cloud browser and Windows-target Rust type check cannot establish them.
 
+The [2026-11-10 local Windows report](windows-validation-local.md) records the
+native build, installer and automated speech checks completed on the local PC.
+Interactive desktop, microphone, game-focus and acoustic checks remain pending.
+
 ## Prerequisites and build
 
 Install Node 24 LTS, Rust stable MSVC, Visual Studio C++ Build Tools with a Windows
@@ -18,6 +22,8 @@ npm ci
 npm run typecheck
 npm test
 npm run build
+# Windows-only, silent synthetic PCM check; does not open or use the microphone
+npm run test:windows:speech
 # Terminal 1
 npm run dev -w @kaling/server
 # Terminal 2
@@ -38,7 +44,8 @@ prerequisite, not a reason to disable Windows security checks.
    rejects last-five clips longer than 900ms, then decodes/schedules Web Audio.
    Choose an output device, verify volume/mute and all spoken 5,4,3,2,1 numbers.
    Test Bird and P2 cases from PRD acceptance tests 6 and 7 by setting remaining
-   times in the host UI. Check both underlying timers keep advancing.
+   times as a Bird-assigned member in P1 and as host in P2. Check both underlying
+   timers keep advancing. P1 audio must follow the assigned primary zone only.
 3. Enable voice, choose the intended microphone, and focus MapleStory. Say
    `狗校准`, `狗校准五十秒`, `鸟飞行减两秒`, `撤销狗校准`, phase commands,
    tiger and zone commands. Verify accepted commands appear in the server event
@@ -46,6 +53,9 @@ prerequisite, not a reason to disable Windows security checks.
    speech must have no effect. Verify the recognizer stays active during reminders.
    Test with headphones and speakers separately; confirm echo cancellation works
    for the selected driver. Raw PCM is sent only to the local PowerShell process.
+   In P1, use the member assigned to the command's zone. Both members of that zone
+   may control it; unassigned and cross-zone commands must be rejected, including
+   from the host. Battle lifecycle and P2/P3 controls remain host-only.
 4. Register each desired global shortcut in settings while MapleStory is focused.
    Test an occupied shortcut and verify conflict reporting. No input is injected
    into MapleStory. Calibration, undo and zone actions have optional blank bindings.

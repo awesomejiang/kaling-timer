@@ -8,6 +8,7 @@ export const SkillIdSchema = z.enum([
   "p1_tiger_pillars",
   "p1_dog_minigame",
   "p2_kaling_flight",
+  "p2_kaling_scroll",
   "p2_kaling_minigame",
   "p3_fullscreen",
 ]);
