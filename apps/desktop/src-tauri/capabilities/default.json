@@ -1,0 +1,10 @@
+{
+  "identifier": "default",
+  "windows": ["main"],
+  "permissions": [
+    "core:default",
+    "core:window:allow-set-always-on-top",
+    "global-shortcut:allow-register",
+    "global-shortcut:allow-unregister-all"
+  ]
+}

@@ -1,0 +1,58 @@
+version: "1.0.0"
+skills:
+  - id: p1_bird_scroll
+    name: 鸟画卷
+    phase: p1
+    zone: bird
+    mode: cast-based
+    cooldownSeconds: { easy: 60, normal: 60, hard: 60, extreme: 60 }
+    initialDelaySeconds: null
+    startEvent: zone-start
+  - id: p1_bird_flight
+    name: 鸟飞行
+    phase: p1
+    zone: bird
+    mode: cast-based
+    cooldownSeconds: { easy: 20, normal: 20, hard: 18, extreme: 18 }
+    initialDelaySeconds: null
+    startEvent: zone-start
+  - id: p1_tiger_pillars
+    name: 虎柱子连线
+    phase: p1
+    zone: tiger
+    mode: manual-one-shot
+    cooldownSeconds: { easy: 30, normal: 30, hard: 30, extreme: 30 }
+    initialDelaySeconds: null
+    startEvent: manual-trigger
+  - id: p1_dog_minigame
+    name: 狗小游戏
+    phase: p1
+    zone: dog
+    mode: cast-based
+    cooldownSeconds: { easy: 60, normal: 60, hard: 60, extreme: 60 }
+    initialDelaySeconds: null
+    startEvent: zone-start
+  - id: p2_kaling_flight
+    name: 卡琳飞行
+    phase: p2
+    zone: null
+    mode: cast-based
+    cooldownSeconds: { easy: 18, normal: 18, hard: 18, extreme: 18 }
+    initialDelaySeconds: null
+    startEvent: phase-start
+  - id: p2_kaling_minigame
+    name: 卡琳小游戏
+    phase: p2
+    zone: null
+    mode: fixed-cycle
+    cooldownSeconds: { easy: 60, normal: 60, hard: 60, extreme: 60 }
+    initialDelaySeconds: null
+    startEvent: phase-start
+  - id: p3_fullscreen
+    name: 卡琳全屏
+    phase: p3
+    zone: null
+    mode: cast-based
+    cooldownSeconds: { easy: 60, normal: 60, hard: 30, extreme: 30 }
+    initialDelaySeconds: null
+    startEvent: last-peril-death

@@ -1,0 +1,10 @@
+node_modules/
+dist/
+target/
+*.tsbuildinfo
+.env
+*.sqlite*
+data/
+test-results/
+playwright-report/
+apps/desktop/src-tauri/gen/
