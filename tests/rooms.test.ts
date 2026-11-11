@@ -53,7 +53,7 @@ it("enforces host authority, assignments, stale versions, idempotency and durabl
       });
     s = assign(h, "bird");
     s = assign(a, "bird");
-    expect(() => assign(b, "bird")).toThrow("ZONE_FULL");
+    s = assign(b, "bird");
     s = assign(b, "dog");
     expect(() =>
       store.command(a, cmd(s.version, { type: "start" }), 10000),
@@ -76,12 +76,37 @@ it("enforces host authority, assignments, stale versions, idempotency and durabl
       cmd(s.version, { type: "calibrate", skill: "p1_dog_minigame" }),
       20000,
     );
+    s = store.command(
+      b,
+      cmd(s.version, { type: "enter-zone", zone: "bird" }),
+      21000,
+    );
+    expect(s.members.filter((member) => member.zone === "bird")).toHaveLength(
+      3,
+    );
+    expect(() =>
+      store.command(
+        b,
+        cmd(s.version, { type: "calibrate", skill: "p1_dog_minigame" }),
+        22000,
+      ),
+    ).toThrow("ZONE_ONLY");
     const before = structuredClone(s);
     store.close();
     store = new RoomStore(mechanics, path);
     expect(store.resume(h)).toEqual(before);
     expect(store.resume(a)).toEqual(before);
     expect(store.command(h, start, 50000)).toEqual(before);
+    const reset = store.command(
+      h,
+      cmd(before.version, { type: "reset" }),
+      51000,
+    );
+    expect(reset.members.map((member) => member.zone)).toEqual([
+      "bird",
+      "bird",
+      "dog",
+    ]);
     const raw = store.db.prepare("SELECT data FROM rooms").get()!
       .data as string;
     expect(raw).not.toContain(h.token);
@@ -153,7 +178,7 @@ it("allows both P1 zone members to control their timers without a host override"
     };
     run(host, { type: "start" });
     expect(canUseVoice(s, dog.memberId)).toBe(true);
-    expect(canUseVoice(s, unassigned.memberId)).toBe(false);
+    expect(canUseVoice(s, unassigned.memberId)).toBe(true);
     const dogActions: Action[] = [
       { type: "calibrate", skill: "p1_dog_minigame", remainingSeconds: 50 },
       { type: "shift", skill: "p1_dog_minigame", seconds: 5 },
@@ -191,6 +216,8 @@ it("allows both P1 zone members to control their timers without a host override"
     expect(() => run(dog, dogActions[0])).toThrow("ZONE_ONLY");
     run(dog, { type: "trigger-tiger" });
     run(host, { type: "phase", phase: "p2" });
+    expect(() => run(dog, { type: "start-p2" })).toThrow("HOST_ONLY");
+    run(host, { type: "start-p2" });
     expect(canUseVoice(s, dog.memberId)).toBe(false);
     expect(() =>
       run(dog, { type: "calibrate", skill: "p2_kaling_flight" }),

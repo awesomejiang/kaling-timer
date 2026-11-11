@@ -22,9 +22,17 @@ export const SettingsSchema = z
     inputDevice: z.string(),
     outputDevice: z.string(),
     voiceConfigPath: z.string(),
+    announcementNames: z
+      .partialRecord(SkillIdSchema, z.string().max(16))
+      .default({}),
+    voiceSkillAliases: z
+      .partialRecord(SkillIdSchema, z.array(z.string().min(1).max(30)).max(5))
+      .default({}),
+    voiceCommandAliases: z
+      .record(z.string(), z.array(z.string().min(1).max(80)).max(5))
+      .default({}),
     hotkeys: z.record(z.string(), z.string().max(80)),
     hotkeysOptInVersion: z.literal(1).default(1),
-    serverUrl: z.string(),
   })
   .strict();
 export type Settings = z.infer<typeof SettingsSchema>;
@@ -48,7 +56,9 @@ export const defaults: Settings = {
   inputDevice: "",
   outputDevice: "",
   voiceConfigPath: "",
-  serverUrl: import.meta.env.VITE_SERVER_URL ?? "",
+  announcementNames: {},
+  voiceSkillAliases: {},
+  voiceCommandAliases: {},
   hotkeys: Object.fromEntries(
     Object.keys(HotkeyActions).map((key) => [key, ""]),
   ),
@@ -63,6 +73,7 @@ export function readSettings(): Settings {
     let migratedHotkeys = false;
     if (stored && typeof stored === "object" && !Array.isArray(stored)) {
       delete stored.extraZones;
+      delete stored.serverUrl;
       if (
         stored.leads &&
         typeof stored.leads === "object" &&

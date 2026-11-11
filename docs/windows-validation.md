@@ -67,7 +67,8 @@ prerequisite, not a reason to disable Windows security checks.
 6. Restart the desktop/server. The Windows credential manager restores the session;
    SQLite restores battle, history and assignments. Disconnect the host while other
    members remain; reconnect and confirm full authoritative state. Offline clients
-   must not submit edits. Exercise 1–6 players and two primary slots per zone.
+   must not submit edits. Exercise 1–6 players, P1 zone movement with three or more
+   players in one zone, and restoration of starting zones after host reset.
 7. Measure actual speaker onset against authoritative deadlines for at least 100
    last-five cues, including background/tray operation. The footer reports scheduler
    lateness and RTT/2 clock uncertainty, not acoustic latency. Record p50/p95/max

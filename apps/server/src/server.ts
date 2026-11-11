@@ -144,6 +144,32 @@ export function createApp(
         return snapshot;
       }),
     );
+    socket.on("room:leave", (input, reply) =>
+      handle(reply, () => {
+        const leaving = ResumeSchema.parse(input);
+        if (
+          session &&
+          (session.code !== leaving.code ||
+            session.memberId !== leaving.memberId)
+        )
+          throw new Error("ALREADY_IN_ROOM");
+        let snapshot: RoomSnapshot | null;
+        try {
+          snapshot = store.leave(leaving);
+        } catch (error) {
+          if (
+            !(error instanceof Error) ||
+            !["ROOM_NOT_FOUND", "UNAUTHORIZED"].includes(error.message)
+          )
+            throw error;
+          snapshot = null;
+        }
+        socket.leave(leaving.code);
+        session = null;
+        if (snapshot) publish(snapshot);
+        return null;
+      }),
+    );
     socket.on("room:command", (input, reply) =>
       handle(reply, () => {
         if (!session) throw new Error("UNAUTHORIZED");

@@ -26,8 +26,11 @@ Password checks use salted scrypt; random capability/session tokens are stored
 as SHA-256 hashes server-side. Public snapshots contain no credentials. Treat
 the database, its directory and backups as private server data.
 
-Build the Windows frontend with `VITE_SERVER_URL=https://your-host` and add that
-specific HTTPS/WSS origin to Tauri's `app.security.csp.connect-src`. Development
+Build the team installer with `VITE_SERVER_URL=https://your-host` and add that
+specific HTTPS/WSS origin to Tauri's `app.security.csp.connect-src`. Everyone uses
+the same installer and joins using the room code and any room password. The app
+does not prompt for the server address. With no configured build address, the
+Windows installer connects to localhost for local testing. Development
 CSP permits only local services by default. Do not weaken it to `*`. Clients must
 use the same mechanics version as the server; bump the version whenever editing
 mechanics values. Mismatched active-room mechanics versions are rejected rather
@@ -40,10 +43,10 @@ Manager and must never be included in room links or Vite build variables. Browse
 sessions hold tokens only in memory and support network reconnect within the same
 page, not reload recovery. Installations do not share a Windows credential entry.
 
-Current limits: at most six actual members, two primary assignments per P1 zone;
-disconnected members retain their seat/session. Membership removal/host transfer
-and automatic room expiry have not been specified by the PRD and are not invented
-here. Plan operational database retention before a long-lived public deployment.
+Rooms hold up to six actual members. Disconnected members retain their seats.
+Explicitly leaving frees the seat, transfers host to the earliest remaining
+member if needed, and deletes the room when the last member leaves. Plan
+operational database retention for rooms abandoned without an explicit exit.
 
 Behind the managed cloud TLS proxy, mount its CA only during dependency install:
 

@@ -27,6 +27,7 @@ interface Admission {
 }
 interface StoredRoom {
   snapshot: RoomSnapshot;
+  startingZones?: Record<string, Zone | null>;
   credentials: Record<string, string>;
   password: { salt: string; hash: string } | null;
 }
@@ -58,14 +59,32 @@ export class RoomStore {
     const stored = JSON.parse(row.data as string) as StoredRoom;
     if (
       stored.snapshot.mechanicsVersion === "1.0.0" &&
-      this.mechanics.version === "1.1.0"
+      ["1.1.0", "1.2.0", "1.3.0", "1.4.0"].includes(this.mechanics.version)
     ) {
       stored.snapshot.battle.timers.p2_kaling_scroll ??= initialBattle(
         stored.snapshot.battle.difficulty,
       ).timers.p2_kaling_scroll;
+      stored.snapshot.mechanicsVersion = "1.1.0";
+    }
+    if (
+      ["1.1.0", "1.2.0"].includes(stored.snapshot.mechanicsVersion) &&
+      ["1.2.0", "1.3.0", "1.4.0"].includes(this.mechanics.version)
+    )
+      stored.snapshot.mechanicsVersion =
+        this.mechanics.version === "1.4.0" ? "1.3.0" : this.mechanics.version;
+    stored.snapshot = RoomSnapshotSchema.parse(stored.snapshot);
+    if (
+      stored.snapshot.mechanicsVersion === "1.3.0" &&
+      this.mechanics.version === "1.4.0"
+    ) {
+      const scroll = stored.snapshot.battle.timers.p2_kaling_scroll;
+      const unconfigured = { firstAt: null, basis: "unconfigured" } as const;
+      if (scroll.basis === "configured") Object.assign(scroll, unconfigured);
+      for (const reference of scroll.history)
+        if (reference.basis === "configured")
+          Object.assign(reference, unconfigured);
       stored.snapshot.mechanicsVersion = this.mechanics.version;
     }
-    stored.snapshot = RoomSnapshotSchema.parse(stored.snapshot);
     if (stored.snapshot.mechanicsVersion !== this.mechanics.version)
       throw new Error("MECHANICS_VERSION_MISMATCH");
     return stored;
@@ -202,6 +221,36 @@ export class RoomStore {
     this.authenticate(room, session);
     return room.snapshot;
   }
+  leave(session: Session): RoomSnapshot | null {
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      const room = this.load(session.code);
+      this.authenticate(room, session);
+      const snapshot = room.snapshot;
+      snapshot.members = snapshot.members.filter(
+        (member) => member.id !== session.memberId,
+      );
+      delete room.credentials[session.memberId];
+      if (room.startingZones) delete room.startingZones[session.memberId];
+      this.db
+        .prepare("DELETE FROM admissions WHERE code=? AND member=?")
+        .run(session.code, session.memberId);
+      if (!snapshot.members.length) {
+        this.db.prepare("DELETE FROM receipts WHERE code=?").run(session.code);
+        this.db.prepare("DELETE FROM rooms WHERE code=?").run(session.code);
+      } else {
+        if (snapshot.hostId === session.memberId)
+          snapshot.hostId = snapshot.members[0].id;
+        snapshot.version++;
+        this.save(room);
+      }
+      this.db.exec("COMMIT");
+      return snapshot.members.length ? snapshot : null;
+    } catch (error) {
+      this.db.exec("ROLLBACK");
+      throw error;
+    }
+  }
   private authenticate(room: StoredRoom, session: Session) {
     if (
       !room.credentials[session.memberId] ||
@@ -252,6 +301,19 @@ export class RoomStore {
       throw e;
     }
   }
+  private setZone(room: StoredRoom, memberId: string, zone: Zone | null) {
+    const snapshot = room.snapshot;
+    if (snapshot.battle.phase === "p1") {
+      room.startingZones ??= Object.fromEntries(
+        snapshot.members.map((member) => [member.id, member.zone]),
+      );
+      if (!(memberId in room.startingZones))
+        room.startingZones[memberId] = zone;
+    } else if (snapshot.battle.phase !== "lobby") {
+      throw new Error("WRONG_PHASE");
+    }
+    snapshot.members.find((member) => member.id === memberId)!.zone = zone;
+  }
   assign(
     session: Session,
     input: { commandId: string; expectedVersion: number; zone: Zone | null },
@@ -261,17 +323,7 @@ export class RoomStore {
       input.commandId,
       input.expectedVersion,
       input,
-      (room) => {
-        const s = room.snapshot;
-        if (
-          input.zone !== null &&
-          s.members.filter(
-            (m) => m.id !== session.memberId && m.zone === input.zone,
-          ).length >= 2
-        )
-          throw new Error("ZONE_FULL");
-        s.members.find((m) => m.id === session.memberId)!.zone = input.zone;
-      },
+      (room) => this.setZone(room, session.memberId, input.zone),
     );
   }
   command(session: Session, input: Command, receivedAt: number) {
@@ -296,13 +348,28 @@ export class RoomStore {
           at < (s.battle.phaseStartAt ?? 0)
         )
           throw new Error("EVENT_BEFORE_PHASE");
-        s.battle = reduceBattle(
-          s.battle,
-          this.mechanics,
-          input.action,
-          at,
-          randomUUID(),
-        );
+        if (input.action.type === "enter-zone") {
+          this.setZone(room, session.memberId, input.action.zone);
+        } else {
+          s.battle = reduceBattle(
+            s.battle,
+            this.mechanics,
+            input.action,
+            at,
+            randomUUID(),
+          );
+          if (input.action.type === "start") {
+            room.startingZones = Object.fromEntries(
+              s.members.map((member) => [member.id, member.zone]),
+            );
+          } else if (input.action.type === "reset") {
+            for (const member of s.members) {
+              const startingZone = room.startingZones?.[member.id];
+              if (startingZone !== undefined) member.zone = startingZone;
+            }
+            delete room.startingZones;
+          }
+        }
         s.log.push({
           at: receivedAt,
           version: s.version + 1,

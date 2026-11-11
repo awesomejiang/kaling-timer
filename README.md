@@ -11,7 +11,7 @@ zone's casts, while the host controls P2/P3 timers.
   validated external mechanics.
 - Milestone 2: deterministic absolute-time predictions, independent calibration,
   zone references, one-shot tiger timer and 32-entry skill/zone undo histories.
-- Milestone 3: 1–6 player rooms, two primary slots per zone, host authority, clock
+- Milestone 3: 1–6 player rooms, P1 zone movement, host authority, clock
   sync, token reconnect, idempotency, stale-version rejection and SQLite persistence.
 - Milestone 4: pure phase-specific audio policies and cancellable preloaded local
   clip scheduler. Runtime audio output/precision needs Windows hardware validation.
@@ -70,9 +70,13 @@ once with a Chinese Windows voice and scheduled as decoded Web Audio buffers.
 
 `config/mechanics.yaml` is the single cooldown source. Unknown first delays remain
 `null` and display as unconfigured. P1 initializes all three zone references at
-battle start, but unknown recurring first activations require calibration and
-tiger requires each explicit trigger. P2 unknown first activations also require
-calibration. Selecting P3 never starts its full-screen timer.
+battle start. An explicit zone calibration such as `鸟开始` starts uncalibrated
+recurring timers at their full cooldown when the first delay is unknown, and
+tiger requires each explicit trigger. `进入二阶段` switches the phase and waits
+for the boss. The host says `二阶段开始` when the boss appears to start the flight
+and minigame timers. Scroll is already available when the boss appears. The
+host says `画卷开始` after seeing it cast to start its 30-second cooldown.
+Selecting P3 never starts its full-screen timer.
 
 After explicit `三凶兽死亡`, P3 uses a configured initial delay if present. Otherwise
 that event is an explicit calibrated reference and the next prediction is
@@ -89,14 +93,20 @@ Current activations are labelled predicted; observed calibration retains a separ
 last-confirmed timestamp. There is no Bind state or automatic phase detection.
 
 Edit `config/voice-commands.yaml`, or select an external YAML/JSON path in native
-settings and restart listening. Full utterances only: no partial matching. `鸟校准`
-is intentionally ambiguous; use `鸟画卷校准`/`鸟飞行校准`. Phase-specific aliases
+settings and restart listening. Full utterances only: no partial matching. `鸟开始`
+calibrates the bird zone. Use `鸟画卷校准` or `鸟飞行校准` for individual skills.
+Phase-specific aliases
 are resolved only in that phase. Voice numbers default to 0–120 (editable up to
 300); button remaining-time calibration supports 0–3600s. Tiger uses its separate
 explicit trigger mapping. Duplicate results are rejected, and speakers use input
 AEC plus strict command grammar; verify your driver in the Windows acceptance run.
 
-P1 members control their own primary zone's skill/zone calibration, shifts and
+Choose your starting zone in the lobby. In P1, say `进入鸟区`, `进入虎区` or
+`进入狗区`, or use the corresponding button, to switch zones. Several players
+can enter the same zone. Timers, reminders and control permissions follow the
+current zone. A host reset restores each member's starting zone.
+
+P1 members control their current zone's skill/zone calibration, shifts and
 undo; tiger members trigger the 30-second single-shot. Both members in a zone may
 operate the shared timer, with stale concurrent commands rejected. Host status
 does not grant cross-zone control. Battle lifecycle and P2/P3 timer controls remain

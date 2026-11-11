@@ -128,6 +128,20 @@ it("enforces room authority over real sockets and restores host after disconnect
     const sample = await reconnected.emitWithAck("clock:sync");
     expect(sample.sentAt).toBeGreaterThanOrEqual(sample.receivedAt);
     expect(JSON.stringify(calibrated.value)).not.toContain(session.token);
+    expect(await reconnected.emitWithAck("room:leave", session)).toEqual({
+      ok: true,
+      value: null,
+    });
+    expect((await reconnected.emitWithAck("room:resume", session)).error).toBe(
+      "UNAUTHORIZED",
+    );
+    const remaining = await member.emitWithAck(
+      "room:resume",
+      joined.value.session,
+    );
+    expect(remaining.value.hostId).toBe(joined.value.session.memberId);
+    expect(remaining.value.members).toHaveLength(1);
+    expect(remaining.value.battle).toEqual(calibrated.value.battle);
   } finally {
     for (const c of [host, member, reconnected, stranger]) c.disconnect();
     await new Promise<void>((resolve) => app.io.close(() => resolve()));

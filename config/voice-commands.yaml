@@ -1,8 +1,8 @@
 version: 1
 maxSeconds: 120
 aliases:
-  p1_bird_scroll: [鸟画卷, 画卷, 鸟]
-  p1_bird_flight: [鸟飞行, 飞行, 鸟]
+  p1_bird_scroll: [鸟画卷, 画卷]
+  p1_bird_flight: [鸟飞行, 飞行]
   p1_tiger_pillars: [虎柱子, 虎柱子连线, 虎, 柱子, 连线]
   p1_dog_minigame: [狗, 狗小游戏, 小游戏]
   p2_kaling_flight: [卡琳飞行, 飞行]
@@ -17,9 +17,14 @@ templates:
   - { pattern: "撤销{skill}校准", operation: undo }
 commands:
   - { utterance: 开始战斗, action: { type: start } }
+  - { utterance: 战斗开始, action: { type: start } }
   - { utterance: 重置战斗, action: { type: reset } }
   - { utterance: 进入二阶段, action: { type: phase, phase: p2 } }
+  - { utterance: 二阶段开始, action: { type: start-p2 } }
   - { utterance: 进入三阶段, action: { type: phase, phase: p3 } }
+  - { utterance: 进入鸟区, action: { type: enter-zone, zone: bird } }
+  - { utterance: 进入虎区, action: { type: enter-zone, zone: tiger } }
+  - { utterance: 进入狗区, action: { type: enter-zone, zone: dog } }
   - { utterance: 三凶兽死亡, action: { type: last-peril-death } }
   - { utterance: 虎柱子开始, action: { type: trigger-tiger } }
   - { utterance: 虎柱子连线开始, action: { type: trigger-tiger } }
@@ -27,6 +32,7 @@ commands:
   - { utterance: 柱子开始, action: { type: trigger-tiger } }
   - { utterance: 连线开始, action: { type: trigger-tiger } }
   - { utterance: 鸟区域校准, action: { type: calibrate-zone, zone: bird } }
+  - { utterance: 鸟开始, action: { type: calibrate-zone, zone: bird } }
   - { utterance: 虎区域校准, action: { type: calibrate-zone, zone: tiger } }
   - { utterance: 狗区域校准, action: { type: calibrate-zone, zone: dog } }
   - { utterance: 撤销鸟区域校准, action: { type: undo-zone, zone: bird } }

@@ -10,6 +10,8 @@ export const ActionSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("start") }).strict(),
   z.object({ type: z.literal("reset") }).strict(),
   z.object({ type: z.literal("phase"), phase: z.enum(["p2", "p3"]) }).strict(),
+  z.object({ type: z.literal("start-p2") }).strict(),
+  z.object({ type: z.literal("enter-zone"), zone: ZoneSchema }).strict(),
   z.object({ type: z.literal("last-peril-death") }).strict(),
   z.object({ type: z.literal("trigger-tiger") }).strict(),
   z

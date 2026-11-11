@@ -73,6 +73,20 @@ details {
   font-variant-numeric: tabular-nums;
   letter-spacing: 1px;
 }
+.admission-grid {
+  display: grid;
+  gap: 12px;
+  margin: 12px 0;
+}
+.admission-grid > section {
+  margin: 0;
+  min-width: 0;
+}
+@media (min-width: 580px) {
+  .admission-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
 label {
   display: block;
   margin: 8px 0;
@@ -347,4 +361,19 @@ html.overlay-mode,
   margin: 8px 0 0;
   font-size: 10px;
   color: #c9dada;
+}
+@media (min-width: 650px) {
+  .settings-panels {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    align-items: start;
+    gap: 8px;
+    margin: 8px 0;
+  }
+  .settings-panels > details {
+    margin: 0;
+  }
+  .settings-panels > details[open] {
+    grid-column: 1 / -1;
+  }
 }

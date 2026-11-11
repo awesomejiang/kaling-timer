@@ -219,6 +219,11 @@ export class VoiceGrammar {
               .replace("{seconds}", String(remaining)),
           );
       const valid = candidates
+        .map((text) =>
+          skill === "p2_kaling_scroll" && operation === "cast"
+            ? text.replaceAll("校准", "开始")
+            : text,
+        )
         .sort((a, b) => a.length - b.length)
         .find((text) => {
           const parsed = this.parse(text, phase);

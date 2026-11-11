@@ -24,6 +24,7 @@ it("shows usable skill-specific voice hints from the current configuration", () 
     }
   }
   expect(grammar.calibrationHints("p1_bird_flight")).toEqual(["飞行校准"]);
+  expect(grammar.calibrationHints("p2_kaling_scroll")).toEqual(["画卷开始"]);
   const custom = structuredClone(grammar.config);
   custom.aliases.p1_dog_minigame = ["汪汪"];
   expect(new VoiceGrammar(custom).calibrationHints("p1_dog_minigame")).toEqual([
@@ -55,7 +56,6 @@ it("accepts only complete configured utterances with correct Chinese remaining s
     "狗校准50秒以后",
     "狗校",
     "狗校准五五秒",
-    "鸟校准",
     "五",
     "聊天狗校准",
     "狗校准999秒",
@@ -67,10 +67,36 @@ it("accepts only complete configured utterances with correct Chinese remaining s
   expect(grammar.parse("飞行校准", "p2")).toMatchObject({
     skill: "p2_kaling_flight",
   });
+  expect(grammar.parse("画卷开始", "p2")).toEqual({
+    type: "calibrate",
+    skill: "p2_kaling_scroll",
+  });
   expect(grammar.parse("狗校准", "p2")).toBeNull();
   expect(grammar.parse("鸟区域校准", "p1")).toEqual({
     type: "calibrate-zone",
     zone: "bird",
+  });
+  expect(grammar.parse("鸟开始", "p1")).toEqual({
+    type: "calibrate-zone",
+    zone: "bird",
+  });
+  for (const [utterance, zone] of [
+    ["进入鸟区", "bird"],
+    ["进入虎区", "tiger"],
+    ["进入狗区", "dog"],
+  ] as const) {
+    expect(grammar.phrases()).toContain(utterance);
+    expect(grammar.parse(utterance, "p1")).toEqual({
+      type: "enter-zone",
+      zone,
+    });
+  }
+  expect(grammar.parse("狗开始", "p1")).toEqual({
+    type: "calibrate",
+    skill: "p1_dog_minigame",
+  });
+  expect(grammar.parse("二阶段开始", "p1")).toEqual({
+    type: "start-p2",
   });
   expect(grammar.parse("虎柱子开始", "p1")).toEqual({ type: "trigger-tiger" });
   for (const alias of ["虎", "柱子", "连线"]) {

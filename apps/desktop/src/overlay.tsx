@@ -3,7 +3,7 @@ import { isTauri, invoke } from "@tauri-apps/api/core";
 import { emitTo, listen } from "@tauri-apps/api/event";
 import { z } from "zod";
 import { RoomSnapshotSchema, SkillIdSchema } from "@kaling/shared";
-import { project } from "@kaling/timer-engine";
+import { hasP2Started, project } from "@kaling/timer-engine";
 import { mechanics } from "./mechanics";
 import { useApp, serverNow, settingsUpdate, report } from "./client";
 
@@ -161,16 +161,20 @@ export function Overlay() {
                   : "—"}
               </div>
               <small>
-                {next
-                  ? next.status === "manual"
-                    ? "手动单次"
-                    : "预测 · 未确认施放"
-                  : skill.id === "p3_fullscreen" &&
-                      !room?.battle.lastPerilDeathAt
-                    ? "等待“三凶兽死亡”"
-                    : phase === "p1"
-                      ? "等待本区校准或手动触发"
-                      : "等待房主校准"}
+                {room && phase === "p2" && !hasP2Started(room.battle, mechanics)
+                  ? "等待 Boss 出现"
+                  : next
+                    ? next.status === "manual"
+                      ? "手动单次"
+                      : "预测 · 未确认施放"
+                    : skill.id === "p3_fullscreen" &&
+                        !room?.battle.lastPerilDeathAt
+                      ? "等待“三凶兽死亡”"
+                      : skill.startEvent === "observed-cast"
+                        ? "等待房主确认首次施放"
+                        : phase === "p1"
+                          ? "等待本区校准或手动触发"
+                          : "等待房主校准"}
               </small>
               <small className="voice-hint">
                 语音：{s?.voiceHints[skill.id]?.join(" / ") || "未配置"}

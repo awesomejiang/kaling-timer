@@ -2,6 +2,7 @@ import { create } from "zustand";
 import { io, type Socket } from "socket.io-client";
 import { isTauri, invoke } from "@tauri-apps/api/core";
 import { ClockSync } from "@kaling/timer-engine";
+import type { VoiceConfig } from "@kaling/voice";
 import {
   ResumeSchema,
   commandPermission,
@@ -24,6 +25,8 @@ let clockInitialized = false;
 interface State {
   room: RoomSnapshot | null;
   session: Session | null;
+  savedSession: Session | null;
+  leavingRoom: boolean;
   connected: boolean;
   synced: boolean;
   error: string;
@@ -34,6 +37,7 @@ interface State {
   micLevel: number;
   voiceResult: string;
   voiceHints: Partial<Record<import("@kaling/shared").SkillId, string[]>>;
+  baseVoiceConfig: VoiceConfig | null;
   audio: string;
   syncErrorMs: number;
   audioLatenessMs: number;
@@ -41,6 +45,8 @@ interface State {
 export const useApp = create<State>(() => ({
   room: null,
   session: null,
+  savedSession: null,
+  leavingRoom: false,
   connected: false,
   synced: false,
   error: "",
@@ -51,6 +57,7 @@ export const useApp = create<State>(() => ({
   micLevel: 0,
   voiceResult: "",
   voiceHints: {},
+  baseVoiceConfig: null,
   audio: "未启用",
   syncErrorMs: Infinity,
   audioLatenessMs: 0,
@@ -73,7 +80,8 @@ export function acceptSnapshot(value: unknown) {
   const snapshot = RoomSnapshotSchema.parse(value);
   if (snapshot.mechanicsVersion !== mechanics.version)
     throw new Error("MECHANICS_VERSION_MISMATCH");
-  const current = useApp.getState().room;
+  const { room: current, session } = useApp.getState();
+  if (session?.code !== snapshot.code) return;
   if (current?.code === snapshot.code && snapshot.version <= current.version)
     return;
   useApp.setState({ room: snapshot });
@@ -96,7 +104,7 @@ export async function connect() {
   useApp.setState({ connected: false, synced: false });
   clock.invalidate();
   const url =
-    useApp.getState().settings.serverUrl ||
+    import.meta.env.VITE_SERVER_URL ||
     (import.meta.env.DEV ? undefined : "http://localhost:3001");
   socket = io(url, { autoConnect: false });
   socket.on("room:snapshot", (value) => {
@@ -128,11 +136,17 @@ export async function connect() {
     useApp.setState({ connected: false, synced: false });
   });
   socket.on("connect_error", () => useApp.setState({ connected: false }));
-  if (isTauri() && !useApp.getState().session) {
+  if (
+    isTauri() &&
+    !useApp.getState().session &&
+    !useApp.getState().savedSession
+  ) {
     try {
       const stored = await invoke<string | null>("load_session");
       if (stored)
-        useApp.setState({ session: ResumeSchema.parse(JSON.parse(stored)) });
+        useApp.setState({
+          savedSession: ResumeSchema.parse(JSON.parse(stored)),
+        });
     } catch {
       report("无法读取安全重连凭据");
     }
@@ -146,8 +160,14 @@ async function established(result: {
   session: Session;
   snapshot: RoomSnapshot;
 }) {
+  try {
+    localStorage.setItem("kaling-last-room-code", result.session.code);
+  } catch {
+    // Room access still works when local storage is unavailable.
+  }
   useApp.setState({
     session: result.session,
+    savedSession: null,
     room: result.snapshot,
     error: "",
   });
@@ -157,6 +177,49 @@ async function established(result: {
     } catch {
       report("安全凭据保存失败；关闭程序后将无法恢复此会话");
     }
+  }
+}
+export async function resumeSavedRoom() {
+  const { savedSession: saved, leavingRoom } = useApp.getState();
+  if (!saved || !socket?.connected) throw new Error("OFFLINE");
+  if (leavingRoom) return;
+  useApp.setState({ leavingRoom: true });
+  try {
+    const reply = await socket.timeout(5000).emitWithAck("room:resume", saved);
+    if (!reply.ok && ["ROOM_NOT_FOUND", "UNAUTHORIZED"].includes(reply.error)) {
+      useApp.setState({
+        savedSession: null,
+        error: "上次房间已失效，请创建或加入房间。",
+      });
+      if (isTauri()) await invoke("clear_session");
+      return;
+    }
+    const snapshot = RoomSnapshotSchema.parse(unwrap(reply));
+    if (snapshot.mechanicsVersion !== mechanics.version)
+      throw new Error("MECHANICS_VERSION_MISMATCH");
+    await established({ session: saved, snapshot });
+  } finally {
+    useApp.setState({ leavingRoom: false });
+  }
+}
+export async function leaveRoom() {
+  const { session, savedSession, pending, leavingRoom } = useApp.getState();
+  const leaving = session ?? savedSession;
+  if (!leaving || !socket?.connected) throw new Error("OFFLINE");
+  if (pending) throw new Error("等待上一条命令确认");
+  if (leavingRoom) return;
+  useApp.setState({ leavingRoom: true });
+  try {
+    unwrap(await socket.timeout(5000).emitWithAck("room:leave", leaving));
+    useApp.setState({
+      room: null,
+      session: null,
+      savedSession: null,
+      error: "",
+    });
+    if (isTauri()) await invoke("clear_session");
+  } finally {
+    useApp.setState({ leavingRoom: false });
   }
 }
 let admissionPending: {
@@ -221,7 +284,7 @@ export async function sendAction(
     mechanics.skills,
   );
   if (denied) throw new Error(denied);
-  if (s.pending) throw new Error("等待上一条命令确认");
+  if (s.pending || s.leavingRoom) throw new Error("等待上一条命令确认");
   useApp.setState({
     pending: {
       commandId: crypto.randomUUID(),

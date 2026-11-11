@@ -17,6 +17,7 @@ const SkillSchema = z
     startEvent: z.enum([
       "zone-start",
       "phase-start",
+      "observed-cast",
       "manual-trigger",
       "last-peril-death",
     ]),
@@ -55,9 +56,11 @@ export const MechanicsSchema = z
           ? "last-peril-death"
           : skill.id === "p1_tiger_pillars"
             ? "manual-trigger"
-            : phase === "p1"
-              ? "zone-start"
-              : "phase-start";
+            : skill.id === "p2_kaling_scroll"
+              ? "observed-cast"
+              : phase === "p1"
+                ? "zone-start"
+                : "phase-start";
       if (
         skill.phase !== phase ||
         skill.zone !== zone ||

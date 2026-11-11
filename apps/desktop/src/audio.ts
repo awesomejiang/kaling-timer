@@ -6,6 +6,7 @@ import {
 } from "@kaling/timer-engine";
 import type { Mechanics } from "@kaling/mechanics";
 import { useApp, serverNow } from "./client";
+import type { SkillId } from "@kaling/shared";
 // Native SAPI renders clips locally once, then Web Audio schedules decoded buffers.
 export class AudioRuntime {
   private context: AudioContext | null = null;
@@ -36,6 +37,34 @@ export class AudioRuntime {
   private ticker: ReturnType<typeof setInterval> | null = null;
   private output: HTMLAudioElement | null = null;
   constructor(private mechanics: Mechanics) {}
+  private announcement(skill: { id: SkillId; name: string }, seconds: number) {
+    const name =
+      useApp.getState().settings.announcementNames[skill.id]?.trim() ||
+      skill.name;
+    return `${name}，${seconds}秒`;
+  }
+  async preview(skill: { id: SkillId; name: string }) {
+    if (!isTauri()) throw new Error("试听需要 Windows 桌面版");
+    const { preview } = await invoke<Record<string, string>>("prepare_clips", {
+      texts: { preview: this.announcement(skill, 10) },
+    });
+    const bytes = Uint8Array.from(atob(preview), (c) => c.charCodeAt(0));
+    const url = URL.createObjectURL(new Blob([bytes], { type: "audio/wav" }));
+    const clip = new Audio(url);
+    const { outputDevice, volume } = useApp.getState().settings;
+    try {
+      if (outputDevice) await clip.setSinkId(outputDevice);
+      clip.volume = volume;
+      await clip.play();
+      await new Promise<void>((resolve, reject) => {
+        clip.onended = () => resolve();
+        clip.onerror = () => reject(new Error("试听播放失败"));
+      });
+    } finally {
+      clip.pause();
+      URL.revokeObjectURL(url);
+    }
+  }
   async prepareAcknowledgement() {
     if (this.context) return;
     this.context = new AudioContext();
@@ -63,7 +92,7 @@ export class AudioRuntime {
     for (const n of [5, 4, 3, 2, 1]) texts[String(n)] = String(n);
     for (const s of this.mechanics.skills)
       for (const lead of useApp.getState().settings.leads[s.id])
-        texts[`${s.id}:${lead}`] = `${s.name}，${lead}秒`;
+        texts[`${s.id}:${lead}`] = this.announcement(s, lead);
     const encoded = await invoke<Record<string, string>>("prepare_clips", {
       texts,
     });

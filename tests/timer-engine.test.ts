@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { describe, it, expect } from "vitest";
 import { loadMechanics } from "@kaling/mechanics";
-import { eventTime, type Action, type BattleState } from "@kaling/shared";
+import { eventTime, type BattleState } from "@kaling/shared";
 import {
   initialBattle,
   project,
@@ -11,7 +11,7 @@ import {
 const mechanics = loadMechanics(
   readFileSync(new URL("../config/mechanics.yaml", import.meta.url), "utf8"),
 );
-const apply = (s: BattleState, a: Action, at = 10000) =>
+const apply = (s: BattleState, a: Parameters<typeof reduceBattle>[2], at = 10000) =>
   reduceBattle(s, mechanics, a, at, "id");
 const start = () => apply(initialBattle("normal"), { type: "start" });
 describe("deterministic lifecycle and calibration", () => {
@@ -50,6 +50,21 @@ describe("deterministic lifecycle and calibration", () => {
     expect(s.timers.p1_bird_scroll.firstAt).toBe(22000);
     expect(s.timers.p1_bird_flight.firstAt).toBe(35000);
   });
+  it("starts unconfigured Bird timers on zone calibration and restores them on undo", () => {
+    let s = apply(start(), { type: "calibrate-zone", zone: "bird" }, 12000);
+    expect(s.timers.p1_bird_scroll.firstAt).toBe(72000);
+    expect(s.timers.p1_bird_flight.firstAt).toBe(32000);
+    expect(s.timers.p1_dog_minigame.firstAt).toBeNull();
+    s = apply(s, { type: "calibrate", skill: "p1_bird_flight" }, 13000);
+    s = apply(s, { type: "calibrate-zone", zone: "bird" }, 14000);
+    expect(s.timers.p1_bird_scroll.firstAt).toBe(74000);
+    expect(s.timers.p1_bird_flight.firstAt).toBe(33000);
+    s = apply(s, { type: "undo-zone", zone: "bird" }, 15000);
+    expect(s.timers.p1_bird_scroll.firstAt).toBe(72000);
+    s = apply(s, { type: "undo-zone", zone: "bird" }, 16000);
+    expect(s.timers.p1_bird_scroll.firstAt).toBeNull();
+    expect(s.timers.p1_bird_flight.firstAt).toBe(33000);
+  });
   it("automatically advances predictions and reanchors a delayed actual cast without Bind state", () => {
     let s = apply(
       start(),
@@ -83,6 +98,7 @@ describe("deterministic lifecycle and calibration", () => {
   });
   it("keeps P2 fixed minigame independent from flight", () => {
     let s = apply(start(), { type: "phase", phase: "p2" });
+    s = apply(s, { type: "start-p2" });
     s = apply(s, { type: "calibrate", skill: "p2_kaling_minigame" }, 10000);
     const before = structuredClone(s.timers.p2_kaling_minigame);
     s = apply(s, { type: "calibrate", skill: "p2_kaling_flight" }, 32000);
@@ -93,10 +109,22 @@ describe("deterministic lifecycle and calibration", () => {
     const skill = "p2_kaling_scroll";
     const p2 = apply(start(), { type: "phase", phase: "p2" });
     expect(project(p2, mechanics, skill, 11000)).toBeNull();
-    const first = apply(p2, { type: "calibrate", skill }, 12000);
+    expect(() => apply(p2, { type: "calibrate", skill }, 11000)).toThrow(
+      "P2_NOT_STARTED",
+    );
+    const active = apply(p2, { type: "start-p2" }, 11000);
+    expect(active.timers.p2_kaling_flight.firstAt).toBe(29000);
+    expect(project(active, mechanics, skill, 11000)).toBeNull();
+    expect(active.timers.p2_kaling_minigame.firstAt).toBe(71000);
+    expect(() => apply(active, { type: "start-p2" }, 12000)).toThrow(
+      "ALREADY_STARTED",
+    );
+    const first = apply(active, { type: "calibrate", skill }, 12000);
     expect(project(first, mechanics, skill, 13000)?.at).toBe(42000);
     const next = apply(first, { type: "calibrate", skill }, 47000);
     expect(project(next, mechanics, skill, 48000)?.at).toBe(77000);
+    const undone = apply(first, { type: "undo-skill", skill }, 48000);
+    expect(project(undone, mechanics, skill, 48000)).toBeNull();
   });
   it("interprets remaining seconds at spoken time, compensates once, and undoes from absolute history", () => {
     const ref = eventTime(

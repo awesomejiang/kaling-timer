@@ -29,6 +29,7 @@ export interface ClientToServerEvents {
     input: unknown,
     reply: (result: Reply<RoomSnapshot>) => void,
   ) => void;
+  "room:leave": (input: unknown, reply: (result: Reply<null>) => void) => void;
   "room:assign": (
     input: unknown,
     reply: (result: Reply<RoomSnapshot>) => void,

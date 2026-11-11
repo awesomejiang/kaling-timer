@@ -83,23 +83,38 @@ function requirePhase(state: BattleState, phase: BattleState["phase"]) {
   if (state.phase !== phase) throw new Error("WRONG_PHASE");
 }
 function rezone(state: BattleState, mechanics: Mechanics, zone: Zone) {
+  const startAt = state.zoneStartAt[zone];
+  const explicitlyCalibrated =
+    state.zoneHistory[zone].length > 0 || startAt !== state.battleStartAt;
   for (const s of mechanics.skills.filter(
     (s) => s.zone === zone && s.mode !== "manual-one-shot",
   )) {
     const t = state.timers[s.id];
     if (t.calibrated) continue;
+    const delay =
+      s.initialDelaySeconds ??
+      (explicitlyCalibrated ? s.cooldownSeconds[state.difficulty] : null);
     t.firstAt =
-      s.initialDelaySeconds === null || state.zoneStartAt[zone] === null
-        ? null
-        : state.zoneStartAt[zone]! + s.initialDelaySeconds * 1000;
+      startAt === null || delay === null ? null : startAt + delay * 1000;
     t.basis = t.firstAt === null ? "unconfigured" : "configured";
     t.version++;
   }
 }
+export function hasP2Started(
+  state: BattleState,
+  mechanics: Mechanics,
+): boolean {
+  return mechanics.skills.some(
+    (skill) =>
+      skill.phase === "p2" &&
+      skill.startEvent === "phase-start" &&
+      state.timers[skill.id].firstAt !== null,
+  );
+}
 export function reduceBattle(
   previous: BattleState,
   mechanics: Mechanics,
-  action: Action,
+  action: Exclude<Action, { type: "enter-zone" }>,
   at: number,
   battleId = "battle",
 ): BattleState {
@@ -137,12 +152,28 @@ export function reduceBattle(
       const t = state.timers[config.id];
       t.version++;
       if (
+        action.phase !== "p2" &&
         config.startEvent === "phase-start" &&
         config.initialDelaySeconds !== null
       ) {
         t.firstAt = at + config.initialDelaySeconds * 1000;
         t.basis = "configured";
       }
+    }
+    return state;
+  }
+  if (action.type === "start-p2") {
+    requirePhase(state, "p2");
+    if (hasP2Started(state, mechanics)) throw new Error("ALREADY_STARTED");
+    for (const skill of mechanics.skills.filter(
+      (skill) => skill.phase === "p2" && skill.startEvent === "phase-start",
+    )) {
+      const timer = state.timers[skill.id];
+      const delay =
+        skill.initialDelaySeconds ?? skill.cooldownSeconds[state.difficulty];
+      timer.firstAt = at + delay * 1000;
+      timer.basis = "configured";
+      timer.version++;
     }
     return state;
   }
@@ -181,6 +212,8 @@ export function reduceBattle(
     action.type === "trigger-tiger" ? "p1_tiger_pillars" : action.skill;
   const config = mechanics.skills.find((s) => s.id === id)!;
   requirePhase(state, config.phase);
+  if (config.phase === "p2" && !hasP2Started(state, mechanics))
+    throw new Error("P2_NOT_STARTED");
   if (id === "p3_fullscreen" && state.lastPerilDeathAt === null)
     throw new Error("LAST_PERIL_EVENT_REQUIRED");
   const t = state.timers[id];

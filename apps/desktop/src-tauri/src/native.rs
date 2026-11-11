@@ -74,6 +74,19 @@ pub fn load_session() -> Result<Option<String>, String> {
     }
 }
 #[tauri::command]
+pub fn clear_session() -> Result<(), String> {
+    #[cfg(windows)]
+    match keyring::Entry::new("Kaling Timer", "reconnect")
+        .map_err(|error| error.to_string())?
+        .delete_credential()
+    {
+        Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
+        Err(error) => Err(error.to_string()),
+    }
+    #[cfg(not(windows))]
+    Ok(())
+}
+#[tauri::command]
 pub async fn prepare_clips(
     texts: HashMap<String, String>,
 ) -> Result<HashMap<String, String>, String> {

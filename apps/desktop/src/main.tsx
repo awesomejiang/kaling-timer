@@ -12,7 +12,7 @@ import {
   type SkillId,
   type Zone,
 } from "@kaling/shared";
-import { project } from "@kaling/timer-engine";
+import { hasP2Started, project } from "@kaling/timer-engine";
 import { mechanics } from "./mechanics";
 import {
   useApp,
@@ -20,6 +20,8 @@ import {
   report,
   createRoom,
   joinRoom,
+  leaveRoom,
+  resumeSavedRoom,
   assign,
   sendAction,
   retryPending,
@@ -27,7 +29,13 @@ import {
   settingsUpdate,
 } from "./client";
 import { AudioRuntime } from "./audio";
-import { VoiceRuntime, applyNativeSettings, refreshVoiceHints } from "./native";
+import {
+  VoiceRuntime,
+  applyNativeSettings,
+  refreshVoiceHints,
+  voiceGrammarWithAliases,
+} from "./native";
+import { SettingsSchema, type Settings } from "./settings";
 import "./style.css";
 import { Overlay, useOverlayBridge } from "./overlay";
 const audio = new AudioRuntime(mechanics),
@@ -42,12 +50,15 @@ function syncLocalFeatures() {
     const audioKey = JSON.stringify([
       s.settings.outputDevice,
       s.settings.leads,
+      s.settings.announcementNames,
     ]);
     const voiceKey = JSON.stringify([
       s.room?.code,
       s.session?.memberId,
       s.settings.inputDevice,
       s.settings.voiceConfigPath,
+      s.settings.voiceSkillAliases,
+      s.settings.voiceCommandAliases,
     ]);
     const wantAudio = !!s.room && s.settings.remindersEnabled;
     const wantVoice =
@@ -89,6 +100,8 @@ const actionNames: Record<Action["type"], string> = {
   start: "开始战斗",
   reset: "重置战斗",
   phase: "切换阶段",
+  "start-p2": "二阶段开始",
+  "enter-zone": "进入区域",
   "last-peril-death": "三凶兽死亡",
   "trigger-tiger": "虎柱子开始",
   difficulty: "难度调整",
@@ -131,17 +144,28 @@ const perform = (action: Action) => sendAction(action).catch(report);
 function Admission() {
   const [name, setName] = useState(""),
     [password, setPassword] = useState(""),
-    [code, setCode] = useState(
-      new URLSearchParams(location.search).get("room") ?? "",
-    ),
+    [enteredCode, setCode] = useState<string | null>(null),
+    [joinName, setJoinName] = useState(""),
+    [joinPassword, setJoinPassword] = useState(""),
     [difficulty, setDifficulty] = useState<Difficulty>("normal"),
     [busy, setBusy] = useState(false);
   const state = useApp();
-  async function submit(join: boolean) {
+  const [cachedCode] = useState(() => {
+    try {
+      return localStorage.getItem("kaling-last-room-code") ?? "";
+    } catch {
+      return "";
+    }
+  });
+  const code =
+    enteredCode ??
+    new URLSearchParams(location.search).get("room")?.toUpperCase() ??
+    state.savedSession?.code ??
+    cachedCode;
+  async function submit(action: () => Promise<void>) {
     setBusy(true);
     try {
-      if (join) await joinRoom(code, name, password);
-      else await createRoom(name, password, difficulty);
+      await action();
     } catch (error) {
       report(error);
     } finally {
@@ -149,63 +173,100 @@ function Admission() {
     }
   }
   return (
-    <section>
-      <h2>建立或加入队伍</h2>
-      <label>
-        称呼
-        <input
-          value={name}
-          maxLength={24}
-          onChange={(e) => setName(e.target.value)}
-        />
-      </label>
-      <label>
-        房间密码（可选）
-        <input
-          type="password"
-          value={password}
-          maxLength={128}
-          onChange={(e) => setPassword(e.target.value)}
-        />
-      </label>
-      <label>
-        难度
-        <select
-          value={difficulty}
-          onChange={(e) => setDifficulty(e.target.value as Difficulty)}
+    <div className="admission-grid">
+      <section aria-labelledby="create-room-heading">
+        <h2 id="create-room-heading">创建房间</h2>
+        <label>
+          称呼（可选）
+          <input
+            aria-label="称呼"
+            value={name}
+            maxLength={24}
+            onChange={(e) => setName(e.target.value)}
+          />
+        </label>
+        <label>
+          房间密码（可选）
+          <input
+            type="password"
+            value={password}
+            maxLength={128}
+            onChange={(e) => setPassword(e.target.value)}
+          />
+        </label>
+        <label>
+          难度
+          <select
+            value={difficulty}
+            onChange={(e) => setDifficulty(e.target.value as Difficulty)}
+          >
+            {DifficultySchema.options.map((d) => (
+              <option key={d} value={d}>
+                {difficultyNames[d]}
+              </option>
+            ))}
+          </select>
+        </label>
+        <button
+          disabled={!state.connected || busy || state.leavingRoom}
+          onClick={() =>
+            submit(async () => {
+              if (state.savedSession) await leaveRoom();
+              await createRoom(name.trim() || "房主", password, difficulty);
+            })
+          }
         >
-          {DifficultySchema.options.map((d) => (
-            <option key={d} value={d}>
-              {difficultyNames[d]}
-            </option>
-          ))}
-        </select>
-      </label>
-      <button
-        disabled={!name.trim() || !state.connected || busy}
-        onClick={() => submit(false)}
-      >
-        创建房间 / 单人
-      </button>
-      <label>
-        房间码
-        <input
-          value={code}
-          maxLength={6}
-          onChange={(e) => setCode(e.target.value.toUpperCase())}
-        />
-      </label>
-      <button
-        disabled={!name.trim() || code.length !== 6 || !state.connected || busy}
-        onClick={() => submit(true)}
-      >
-        加入房间
-      </button>
-      <p className="muted">
-        无需账号。浏览器会话凭据仅保存在当前页面内存；Windows
-        版使用凭据管理器保存重连信息。
-      </p>
-    </section>
+          创建房间 / 单人
+        </button>
+      </section>
+      <section aria-labelledby="join-room-heading">
+        <h2 id="join-room-heading">加入房间</h2>
+        <label>
+          房间码
+          <input
+            value={code}
+            maxLength={6}
+            onChange={(e) => setCode(e.target.value.toUpperCase())}
+          />
+        </label>
+        <label>
+          称呼（可选）
+          <input
+            aria-label="称呼"
+            value={joinName}
+            maxLength={24}
+            onChange={(e) => setJoinName(e.target.value)}
+          />
+        </label>
+        <label>
+          房间密码（可选）
+          <input
+            type="password"
+            value={joinPassword}
+            maxLength={128}
+            onChange={(e) => setJoinPassword(e.target.value)}
+          />
+        </label>
+        <button
+          disabled={
+            code.length !== 6 || !state.connected || busy || state.leavingRoom
+          }
+          onClick={() => {
+            setCode(code);
+            void submit(async () => {
+              if (state.savedSession?.code === code) {
+                await resumeSavedRoom();
+                return;
+              }
+              if (state.savedSession) await leaveRoom();
+              await joinRoom(code, joinName.trim() || "队员", joinPassword);
+            });
+          }}
+        >
+          加入房间
+        </button>
+      </section>
+    </div>
   );
 }
 function TimerCard({
@@ -220,6 +281,8 @@ function TimerCard({
   editable: boolean;
 }) {
   const room = useApp((s) => s.room)!;
+  const waitingForP2 =
+    room.battle.phase === "p2" && !hasP2Started(room.battle, mechanics);
   const voiceHints = useApp((s) => s.voiceHints[id]);
   const config = mechanics.skills.find((s) => s.id === id)!,
     timer = room.battle.timers[id];
@@ -252,19 +315,23 @@ function TimerCard({
         {next ? Math.max(0, (next.at - now) / 1000).toFixed(1) : "—"}
       </div>
       <p>
-        {next
-          ? next.status === "manual"
-            ? "手动倒计时"
-            : "预测激活 · 未确认施法"
-          : config.startEvent === "manual-trigger"
-            ? "等待手动触发"
-            : id === "p3_fullscreen" && room.battle.lastPerilDeathAt === null
-              ? "等待“三凶兽死亡”事件"
-              : timer.firstAt === null
-                ? config.phase === "p1"
-                  ? "首轮延迟未配置 · 需要本区成员校准"
-                  : "首轮延迟未配置 · 需要房主校准"
-                : "本次倒计时已结束"}
+        {waitingForP2
+          ? "等待 Boss 出现"
+          : next
+            ? next.status === "manual"
+              ? "手动倒计时"
+              : "预测激活 · 未确认施法"
+            : config.startEvent === "manual-trigger"
+              ? "等待手动触发"
+              : id === "p3_fullscreen" && room.battle.lastPerilDeathAt === null
+                ? "等待“三凶兽死亡”事件"
+                : timer.firstAt === null
+                  ? config.startEvent === "observed-cast"
+                    ? "等待房主确认首次施放"
+                    : config.phase === "p1"
+                      ? "首轮延迟未配置 · 需要本区成员校准"
+                      : "首轮延迟未配置 · 需要房主校准"
+                  : "本次倒计时已结束"}
       </p>
       {timer.basis === "last-peril-reference" && (
         <small>
@@ -277,7 +344,7 @@ function TimerCard({
         </small>
       )}
       {control && (
-        <fieldset disabled={!editable}>
+        <fieldset disabled={!editable || waitingForP2}>
           <legend>{config.name}校准</legend>
           {config.mode === "manual-one-shot" ? (
             <button onClick={() => perform({ type: "trigger-tiger" })}>
@@ -358,26 +425,47 @@ function Room({ now }: { now: number }) {
   const s = useApp(),
     room = s.room!,
     host = s.session?.memberId === room.hostId,
-    editable = s.connected && s.synced && !s.pending;
+    editable = s.connected && s.synced && !s.pending && !s.leavingRoom;
   const member = room.members.find((m) => m.id === s.session?.memberId);
+  const skills = mechanics.skills.filter(
+    (skill) => skill.phase === room.battle.phase,
+  );
+  if (room.battle.phase === "p1" && member?.zone) {
+    skills.sort(
+      (a, b) => Number(b.zone === member.zone) - Number(a.zone === member.zone),
+    );
+  }
   return (
     <>
       <section>
         <div className="row">
           <h2>房间 {room.code}</h2>
-          <button
-            onClick={() =>
-              navigator.clipboard
-                .writeText(
-                  isTauri()
-                    ? room.code
-                    : `${location.origin}${location.pathname}?room=${room.code}`,
-                )
-                .catch(report)
-            }
-          >
-            {isTauri() ? "复制房间码" : "复制加入链接"}
-          </button>
+          <div className="buttons">
+            <button
+              onClick={() =>
+                navigator.clipboard
+                  .writeText(
+                    isTauri()
+                      ? room.code
+                      : `${location.origin}${location.pathname}?room=${room.code}`,
+                  )
+                  .catch(report)
+              }
+            >
+              {isTauri() ? "复制房间码" : "复制加入链接"}
+            </button>
+            <button
+              disabled={!s.connected || !!s.pending || s.leavingRoom}
+              title={
+                host && room.members.length > 1
+                  ? "退出后由下一位成员接任房主"
+                  : undefined
+              }
+              onClick={() => leaveRoom().catch(report)}
+            >
+              退出房间
+            </button>
+          </div>
         </div>
         <p>
           {host ? "房主" : "队员"} ·{" "}
@@ -396,31 +484,42 @@ function Room({ now }: { now: number }) {
             </li>
           ))}
         </ul>
-        <label>
-          我的主区域（每区 2 人）
-          <select
-            aria-label="我的主区域"
-            value={member?.zone ?? ""}
-            disabled={!editable}
-            onChange={(e) =>
-              assign((e.target.value || null) as Zone | null).catch(report)
-            }
-          >
-            <option value="">未分配</option>
-            {ZoneSchema.options.map((z) => (
-              <option
-                value={z}
-                key={z}
-                disabled={
-                  member?.zone !== z &&
-                  room.members.filter((m) => m.zone === z).length >= 2
-                }
+        {room.battle.phase === "lobby" && (
+          <label>
+            开战分区
+            <select
+              aria-label="我的主区域"
+              value={member?.zone ?? ""}
+              disabled={!editable}
+              onChange={(e) =>
+                assign((e.target.value || null) as Zone | null).catch(report)
+              }
+            >
+              <option value="">未分配</option>
+              {ZoneSchema.options.map((z) => (
+                <option value={z} key={z}>
+                  {names[z]}区（
+                  {room.members.filter((m) => m.zone === z).length} 人）
+                </option>
+              ))}
+            </select>
+          </label>
+        )}
+        {room.battle.phase === "p1" && (
+          <div className="buttons" role="group" aria-label="P1 转区">
+            {ZoneSchema.options.map((zone) => (
+              <button
+                key={zone}
+                disabled={!editable || member?.zone === zone}
+                aria-pressed={member?.zone === zone}
+                className={member?.zone === zone ? "toggle-active" : ""}
+                onClick={() => perform({ type: "enter-zone", zone })}
               >
-                {names[z]} ({room.members.filter((m) => m.zone === z).length}/2)
-              </option>
+                进入{names[zone]}区
+              </button>
             ))}
-          </select>
-        </label>
+          </div>
+        )}
         {host && (
           <fieldset disabled={!editable}>
             <legend>房主控制</legend>
@@ -457,6 +556,14 @@ function Room({ now }: { now: number }) {
               >
                 进入二阶段
               </button>
+              {room.battle.phase === "p2" && (
+                <button
+                  disabled={hasP2Started(room.battle, mechanics)}
+                  onClick={() => perform({ type: "start-p2" })}
+                >
+                  二阶段开始
+                </button>
+              )}
               <button
                 disabled={room.battle.phase !== "p2"}
                 onClick={() => perform({ type: "phase", phase: "p3" })}
@@ -481,34 +588,36 @@ function Room({ now }: { now: number }) {
             </div>
           </fieldset>
         )}
-        {room.battle.phase === "p1" && member?.zone && (
-          <fieldset disabled={!editable}>
-            <legend>本区计时控制（同区成员共享）</legend>
-            {[member.zone].map((zone) => (
-              <div className="row" key={zone}>
-                <span>
-                  {names[zone]}区参考{" "}
-                  {room.battle.zoneStartAt[zone] === null
-                    ? "—"
-                    : new Date(
-                        room.battle.zoneStartAt[zone]!,
-                      ).toLocaleTimeString()}
-                </span>
-                <button
-                  onClick={() => perform({ type: "calibrate-zone", zone })}
-                >
-                  {names[zone]}区域校准
-                </button>
-                <button
-                  disabled={!room.battle.zoneHistory[zone].length}
-                  onClick={() => perform({ type: "undo-zone", zone })}
-                >
-                  撤销
-                </button>
-              </div>
-            ))}
-          </fieldset>
-        )}
+        {room.battle.phase === "p1" &&
+          member?.zone &&
+          member.zone !== "tiger" && (
+            <fieldset disabled={!editable}>
+              <legend>本区计时控制（同区成员共享）</legend>
+              {[member.zone].map((zone) => (
+                <div className="row" key={zone}>
+                  <span>
+                    {names[zone]}区参考{" "}
+                    {room.battle.zoneStartAt[zone] === null
+                      ? "—"
+                      : new Date(
+                          room.battle.zoneStartAt[zone]!,
+                        ).toLocaleTimeString()}
+                  </span>
+                  <button
+                    onClick={() => perform({ type: "calibrate-zone", zone })}
+                  >
+                    {zone === "bird" ? "鸟开始" : `${names[zone]}区域校准`}
+                  </button>
+                  <button
+                    disabled={!room.battle.zoneHistory[zone].length}
+                    onClick={() => perform({ type: "undo-zone", zone })}
+                  >
+                    撤销
+                  </button>
+                </div>
+              ))}
+            </fieldset>
+          )}
         {!s.connected && (
           <p role="alert">
             离线：仅显示本地投影，修改不可用；连接恢复后自动获取完整快照。
@@ -531,26 +640,24 @@ function Room({ now }: { now: number }) {
         </section>
       ) : (
         <div className="timers">
-          {mechanics.skills
-            .filter((skill) => skill.phase === room.battle.phase)
-            .map((skill) => (
-              <TimerCard
-                key={skill.id}
-                id={skill.id}
-                now={now}
-                control={
-                  commandPermission(
-                    room,
-                    s.session?.memberId,
-                    skill.mode === "manual-one-shot"
-                      ? { type: "trigger-tiger" }
-                      : { type: "calibrate", skill: skill.id },
-                    mechanics.skills,
-                  ) === null
-                }
-                editable={editable}
-              />
-            ))}
+          {skills.map((skill) => (
+            <TimerCard
+              key={skill.id}
+              id={skill.id}
+              now={now}
+              control={
+                commandPermission(
+                  room,
+                  s.session?.memberId,
+                  skill.mode === "manual-one-shot"
+                    ? { type: "trigger-tiger" }
+                    : { type: "calibrate", skill: skill.id },
+                  mechanics.skills,
+                ) === null
+              }
+              editable={editable}
+            />
+          ))}
         </div>
       )}
       <details>
@@ -568,172 +675,145 @@ function Room({ now }: { now: number }) {
   );
 }
 function SettingsPanel() {
-  const s = useApp(),
-    settings = s.settings,
+  const settings = useApp((s) => s.settings),
     [devices, setDevices] = useState<MediaDeviceInfo[]>([]),
-    [server, setServer] = useState(settings.serverUrl);
+    [previewing, setPreviewing] = useState(false);
   async function devicesRefresh() {
     const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
     stream.getTracks().forEach((t) => t.stop());
     setDevices(await navigator.mediaDevices.enumerateDevices());
   }
   return (
-    <details>
-      <summary>本地设置</summary>
-      <div className="settings">
-        <label>
-          服务地址
-          <input
-            value={server}
-            placeholder="默认本机服务器"
-            onChange={(e) => setServer(e.target.value)}
-          />
-        </label>
-        <button
-          disabled={!!s.room}
-          onClick={() => {
-            try {
-              if (server && !/^https?:\/\//.test(server))
-                throw new Error("服务地址需要 HTTP(S)");
-              settingsUpdate({ serverUrl: server });
-              connect().catch(report);
-            } catch (error) {
-              report(error);
-            }
-          }}
-        >
-          应用服务地址
-        </button>
-        <label>
-          <input
-            type="checkbox"
-            checked={settings.alwaysOnTop}
-            onChange={(e) => {
-              settingsUpdate({ alwaysOnTop: e.target.checked });
-              applyNativeSettings().catch(report);
-            }}
-          />
-          始终置顶（桌面版）
-        </label>
-        <label>
-          <input
-            type="checkbox"
-            checked={settings.mute}
-            onChange={(e) => settingsUpdate({ mute: e.target.checked })}
-          />
-          静音
-        </label>
-        <label>
-          音量
-          <input
-            type="range"
-            min={0}
-            max={1}
-            step={0.05}
-            value={settings.volume}
-            onChange={(e) => settingsUpdate({ volume: Number(e.target.value) })}
-          />
-        </label>
-        <label>
-          悬浮窗背景不透明度 {Math.round(settings.overlayOpacity * 100)}%
-          <input
-            type="range"
-            min={0.15}
-            max={1}
-            step={0.05}
-            value={settings.overlayOpacity}
-            onChange={(event) =>
-              settingsUpdate({ overlayOpacity: Number(event.target.value) })
-            }
-          />
-        </label>
-        <p className="muted">
-          锁定后，鼠标可直接操作后面的游戏。可在主窗口或托盘选择“解锁悬浮窗”。
-        </p>
-        <button onClick={() => devicesRefresh().catch(report)}>
-          授权并刷新设备
-        </button>
-        {(["input", "output"] as const).map((kind) => (
-          <label key={kind}>
-            {kind === "input" ? "麦克风" : "扬声器"}
-            <select
-              value={
-                kind === "input" ? settings.inputDevice : settings.outputDevice
-              }
+    <div className="settings-panels">
+      <details>
+        <summary>本地设置</summary>
+        <div className="settings">
+          <label>
+            <input
+              type="checkbox"
+              checked={settings.alwaysOnTop}
               onChange={(e) => {
-                settingsUpdate(
-                  kind === "input"
-                    ? { inputDevice: e.target.value }
-                    : { outputDevice: e.target.value },
-                );
+                settingsUpdate({ alwaysOnTop: e.target.checked });
+                applyNativeSettings().catch(report);
               }}
-            >
-              <option value="">系统默认</option>
-              {devices
-                .filter((d) => d.kind === `audio${kind}`)
-                .map((d) => (
-                  <option key={d.deviceId} value={d.deviceId}>
-                    {d.label || d.deviceId}
-                  </option>
-                ))}
-            </select>
+            />
+            始终置顶（桌面版）
           </label>
-        ))}
-        <label>
-          识别补偿（秒，语音起点可用时不重复补偿）
-          <input
-            type="number"
-            min={0}
-            max={3}
-            step={0.1}
-            value={settings.compensationMs / 1000}
-            onChange={(e) =>
-              settingsUpdate({
-                compensationMs: Math.round(Number(e.target.value) * 1000),
-              })
-            }
-          />
-        </label>
-        <label>
-          外部语音配置路径
-          <input
-            value={settings.voiceConfigPath}
-            onChange={(e) =>
-              settingsUpdate({ voiceConfigPath: e.target.value })
-            }
-          />
-        </label>
-        <p className="muted">
-          修改语法或输入设备后自动应用。完整句式、无唤醒词；建议使用耳机，输入启用回声消除。
-        </p>
-        <label>
-          音频冲突窗口（秒）
-          <input
-            type="number"
-            min={0}
-            max={30}
-            value={settings.conflictSeconds}
-            onChange={(e) =>
-              settingsUpdate({ conflictSeconds: Number(e.target.value) })
-            }
-          />
-        </label>
-        <label>
-          鸟区同时激活优先项
-          <select
-            value={settings.birdPriority}
-            onChange={(e) =>
-              settingsUpdate({
-                birdPriority: e.target.value as typeof settings.birdPriority,
-              })
-            }
-          >
-            <option value="p1_bird_scroll">鸟画卷</option>
-            <option value="p1_bird_flight">鸟飞行</option>
-          </select>
-        </label>
-        <fieldset>
-          <legend>每技能提醒（启用时始终包含 5、4、3、2、1）</legend>
+          <label>
+            <input
+              type="checkbox"
+              checked={settings.mute}
+              onChange={(e) => settingsUpdate({ mute: e.target.checked })}
+            />
+            静音
+          </label>
+          <label>
+            音量
+            <input
+              type="range"
+              min={0}
+              max={1}
+              step={0.05}
+              value={settings.volume}
+              onChange={(e) =>
+                settingsUpdate({ volume: Number(e.target.value) })
+              }
+            />
+          </label>
+          <label>
+            悬浮窗背景不透明度 {Math.round(settings.overlayOpacity * 100)}%
+            <input
+              type="range"
+              min={0.15}
+              max={1}
+              step={0.05}
+              value={settings.overlayOpacity}
+              onChange={(event) =>
+                settingsUpdate({ overlayOpacity: Number(event.target.value) })
+              }
+            />
+          </label>
+          <p className="muted">
+            锁定后，鼠标可直接操作后面的游戏。可在主窗口或托盘选择“解锁悬浮窗”。
+          </p>
+          <button onClick={() => devicesRefresh().catch(report)}>
+            授权并刷新设备
+          </button>
+          {(["input", "output"] as const).map((kind) => (
+            <label key={kind}>
+              {kind === "input" ? "麦克风" : "扬声器"}
+              <select
+                value={
+                  kind === "input"
+                    ? settings.inputDevice
+                    : settings.outputDevice
+                }
+                onChange={(e) => {
+                  settingsUpdate(
+                    kind === "input"
+                      ? { inputDevice: e.target.value }
+                      : { outputDevice: e.target.value },
+                  );
+                }}
+              >
+                <option value="">系统默认</option>
+                {devices
+                  .filter((d) => d.kind === `audio${kind}`)
+                  .map((d) => (
+                    <option key={d.deviceId} value={d.deviceId}>
+                      {d.label || d.deviceId}
+                    </option>
+                  ))}
+              </select>
+            </label>
+          ))}
+          <label>
+            识别补偿（秒，语音起点可用时不重复补偿）
+            <input
+              type="number"
+              min={0}
+              max={3}
+              step={0.1}
+              value={settings.compensationMs / 1000}
+              onChange={(e) =>
+                settingsUpdate({
+                  compensationMs: Math.round(Number(e.target.value) * 1000),
+                })
+              }
+            />
+          </label>
+          <label>
+            外部语音配置路径
+            <input
+              value={settings.voiceConfigPath}
+              onChange={(e) =>
+                settingsUpdate({ voiceConfigPath: e.target.value })
+              }
+            />
+          </label>
+          <p className="muted">
+            修改语法或输入设备后自动应用。完整句式、无唤醒词；建议使用耳机，输入启用回声消除。
+          </p>
+          <label>
+            音频冲突窗口（秒）
+            <input
+              type="number"
+              min={0}
+              max={30}
+              value={settings.conflictSeconds}
+              onChange={(e) =>
+                settingsUpdate({ conflictSeconds: Number(e.target.value) })
+              }
+            />
+          </label>
+        </div>
+      </details>
+      <details>
+        <summary>技能提醒时间</summary>
+        <div className="settings">
+          <p className="muted">
+            开启提醒的技能会播报 5、4、3、2、1，也可以设置更早的提醒。
+          </p>
           {mechanics.skills.map((skill) => (
             <div key={skill.id}>
               <label>
@@ -752,6 +832,40 @@ function SettingsPanel() {
                 />
                 {skill.name}
               </label>
+              <div className="row">
+                <label>
+                  播报简称
+                  <input
+                    aria-label={`${skill.name}播报简称`}
+                    maxLength={16}
+                    placeholder={skill.name}
+                    defaultValue={settings.announcementNames[skill.id] ?? ""}
+                    onBlur={(event) => {
+                      const name = event.currentTarget.value.trim();
+                      if (name !== (settings.announcementNames[skill.id] ?? ""))
+                        settingsUpdate({
+                          announcementNames: {
+                            ...useApp.getState().settings.announcementNames,
+                            [skill.id]: name,
+                          },
+                        });
+                    }}
+                  />
+                </label>
+                <button
+                  aria-label={`试听${skill.name}`}
+                  disabled={!isTauri() || previewing}
+                  onClick={() => {
+                    setPreviewing(true);
+                    audio
+                      .preview(skill)
+                      .catch(report)
+                      .finally(() => setPreviewing(false));
+                  }}
+                >
+                  试听
+                </button>
+              </div>
               <label>
                 额外提前秒数（逗号分隔，6–300）
                 <input
@@ -772,10 +886,13 @@ function SettingsPanel() {
               </label>
             </div>
           ))}
-        </fieldset>
-        <fieldset>
-          <legend>全局快捷键（MapleStory 聚焦时也有效）</legend>
-          <p className="muted">默认不绑定快捷键。需要时填写，留空即禁用。</p>
+        </div>
+      </details>
+      <VoiceCommandsPanel />
+      <details>
+        <summary>全局快捷键</summary>
+        <div className="settings">
+          <p className="muted">在 MapleStory 聚焦时也有效。留空即禁用。</p>
           {Object.entries(settings.hotkeys).map(([key, value]) => (
             <label key={key}>
               {hotkeyLabel(key)}
@@ -798,7 +915,129 @@ function SettingsPanel() {
           >
             注册快捷键并检查冲突
           </button>
-        </fieldset>
+        </div>
+      </details>
+    </div>
+  );
+}
+function AliasField({
+  label,
+  aliases,
+  save,
+}: {
+  label: string;
+  aliases: string[];
+  save: (aliases: string[]) => void;
+}) {
+  const stored = aliases.join("，");
+  return (
+    <label>
+      {label}
+      <input
+        defaultValue={stored}
+        placeholder="多个别名用逗号分隔"
+        onBlur={(event) => {
+          const input = event.currentTarget;
+          const values = [
+            ...new Set(
+              input.value
+                .split(/[,，]/)
+                .map((value) => value.trim())
+                .filter(Boolean),
+            ),
+          ];
+          if (values.join("，") === stored) return;
+          try {
+            if (values.length > 5) throw new Error("每项最多可添加 5 个别名");
+            save(values);
+            input.value = values.join("，");
+          } catch (error) {
+            input.value = stored;
+            report(error);
+          }
+        }}
+      />
+    </label>
+  );
+}
+
+function VoiceCommandsPanel() {
+  const config = useApp((s) => s.baseVoiceConfig);
+  const settings = useApp((s) => s.settings);
+  const commands = new Map<string, string[]>();
+  for (const { utterance, action } of config?.commands ?? []) {
+    const key = JSON.stringify(action);
+    const entries = commands.get(key) ?? [];
+    entries.push(utterance);
+    commands.set(key, entries);
+  }
+  function save(patch: Partial<Settings>) {
+    if (!config) return;
+    const next = SettingsSchema.parse({
+      ...useApp.getState().settings,
+      ...patch,
+    });
+    voiceGrammarWithAliases(config, next);
+    settingsUpdate(patch);
+    useApp.setState({ error: "" });
+  }
+  return (
+    <details>
+      <summary>语音口令</summary>
+      <div className="settings">
+        <p className="muted">
+          给现有口令添加自己的说法，留空可恢复默认。技能简称可搭配「开始」「校准」或秒数。
+        </p>
+        {config && (
+          <>
+            {(["p1", "p2", "p3"] as const).map((phase) => (
+              <fieldset key={phase}>
+                <legend>{phase.toUpperCase()} 技能简称</legend>
+                {mechanics.skills
+                  .filter((skill) => skill.phase === phase)
+                  .map((skill) => (
+                    <div key={skill.id}>
+                      <small>
+                        {skill.name} · {config.aliases[skill.id].join("、")}
+                      </small>
+                      <AliasField
+                        label={`${skill.name}自定义简称`}
+                        aliases={settings.voiceSkillAliases[skill.id] ?? []}
+                        save={(aliases) =>
+                          save({
+                            voiceSkillAliases: {
+                              ...useApp.getState().settings.voiceSkillAliases,
+                              [skill.id]: aliases,
+                            },
+                          })
+                        }
+                      />
+                    </div>
+                  ))}
+              </fieldset>
+            ))}
+            <fieldset>
+              <legend>战斗与转区口令</legend>
+              {[...commands].map(([key, phrases]) => (
+                <div key={key}>
+                  <small>{phrases.join("、")}</small>
+                  <AliasField
+                    label={`${phrases[0]}自定义口令`}
+                    aliases={settings.voiceCommandAliases[key] ?? []}
+                    save={(aliases) =>
+                      save({
+                        voiceCommandAliases: {
+                          ...useApp.getState().settings.voiceCommandAliases,
+                          [key]: aliases,
+                        },
+                      })
+                    }
+                  />
+                </div>
+              ))}
+            </fieldset>
+          </>
+        )}
       </div>
     </details>
   );
@@ -827,7 +1066,11 @@ function App() {
   const voiceAllowed = !!s.room && canUseVoice(s.room, s.session?.memberId);
   useEffect(() => {
     refreshVoiceHints().catch(report);
-  }, [s.settings.voiceConfigPath]);
+  }, [
+    s.settings.voiceConfigPath,
+    s.settings.voiceSkillAliases,
+    s.settings.voiceCommandAliases,
+  ]);
   useEffect(() => {
     syncLocalFeatures();
   }, [
@@ -840,6 +1083,9 @@ function App() {
     s.settings.outputDevice,
     s.settings.voiceConfigPath,
     s.settings.leads,
+    s.settings.announcementNames,
+    s.settings.voiceSkillAliases,
+    s.settings.voiceCommandAliases,
   ]);
   const audioOn = s.audio === "已启用";
   const voiceOn = s.mic.startsWith("监听中");

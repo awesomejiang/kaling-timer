@@ -13,9 +13,11 @@ export function commandPermission(
   memberId: string | undefined,
   action: Action,
   skills: readonly SkillScope[],
-): "UNAUTHORIZED" | "ZONE_ONLY" | "HOST_ONLY" | null {
+): "UNAUTHORIZED" | "ZONE_ONLY" | "HOST_ONLY" | "WRONG_PHASE" | null {
   const member = room.members.find((candidate) => candidate.id === memberId);
   if (!member) return "UNAUTHORIZED";
+  if (action.type === "enter-zone")
+    return room.battle.phase === "p1" ? null : "WRONG_PHASE";
   const skill =
     "skill" in action
       ? skills.find((candidate) => candidate.id === action.skill)
@@ -41,6 +43,7 @@ export function canUseVoice(room: RoomSnapshot, memberId: string | undefined) {
   return (
     !!member &&
     (room.hostId === memberId ||
-      (member.zone !== null && ["lobby", "p1"].includes(room.battle.phase)))
+      room.battle.phase === "p1" ||
+      (member.zone !== null && room.battle.phase === "lobby"))
   );
 }

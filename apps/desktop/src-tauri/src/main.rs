@@ -14,6 +14,7 @@ fn main() {
             native::read_voice_config,
             native::save_session,
             native::load_session,
+            native::clear_session,
             native::prepare_clips,
             native::start_speech,
             native::stop_speech,

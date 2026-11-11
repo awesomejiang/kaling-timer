@@ -2,31 +2,106 @@ import { invoke, isTauri } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { register, unregisterAll } from "@tauri-apps/plugin-global-shortcut";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { VoiceGrammar, VoiceDeduper, loadVoiceConfig } from "@kaling/voice";
+import {
+  VoiceGrammar,
+  VoiceDeduper,
+  loadVoiceConfig,
+  type VoiceConfig,
+} from "@kaling/voice";
 import {
   HotkeyActions,
   commandPermission,
   canUseVoice,
   SkillIdSchema,
+  type Action,
+  type Phase,
 } from "@kaling/shared";
 import { mechanics } from "./mechanics";
 import source from "../../../config/voice-commands.yaml?raw";
 import { report, serverNow, sendAction, useApp, clock } from "./client";
 import type { AudioRuntime } from "./audio";
+import type { Settings } from "./settings";
+
+export function voiceGrammarWithAliases(base: VoiceConfig, settings: Settings) {
+  const config = structuredClone(base);
+  const commands: VoiceConfig["commands"] = [];
+  const normalize = (text: string) => text.replaceAll("开始", "校准");
+  for (const skill of SkillIdSchema.options) {
+    for (const alias of settings.voiceSkillAliases[skill] ?? []) {
+      const conflict = SkillIdSchema.options.some(
+        (other) =>
+          other !== skill &&
+          other.slice(0, 2) === skill.slice(0, 2) &&
+          [
+            ...base.aliases[other],
+            ...(settings.voiceSkillAliases[other] ?? []),
+          ].some((name) => normalize(name) === normalize(alias)),
+      );
+      if (conflict) throw new Error(`「${alias}」已用于同阶段的其他技能`);
+      if (!config.aliases[skill].includes(alias))
+        config.aliases[skill].push(alias);
+      if (skill === "p1_tiger_pillars")
+        commands.push({
+          utterance: `${alias}开始`,
+          action: { type: "trigger-tiger" },
+        });
+    }
+  }
+  const actions = new Map<string, Action>(
+    base.commands.map(({ action }) => [JSON.stringify(action), action]),
+  );
+  for (const [key, aliases] of Object.entries(settings.voiceCommandAliases)) {
+    const action = actions.get(key);
+    if (action)
+      for (const utterance of aliases) commands.push({ utterance, action });
+  }
+  config.commands.push(...commands);
+  const grammar = new VoiceGrammar(config);
+  for (const { utterance, action } of commands) {
+    const phases: Phase[] = ["lobby", "p1", "p2", "p3"];
+    if (
+      phases.some(
+        (phase) =>
+          JSON.stringify(grammar.parse(utterance, phase)) !==
+          JSON.stringify(action),
+      )
+    ) {
+      throw new Error(`「${utterance}」与现有口令冲突`);
+    }
+  }
+  for (const skill of SkillIdSchema.options) {
+    const phase = skill.slice(0, 2) as Phase;
+    for (const alias of settings.voiceSkillAliases[skill] ?? []) {
+      for (const template of config.templates) {
+        if (skill === "p1_tiger_pillars" && template.operation !== "undo")
+          continue;
+        const utterance = template.pattern
+          .replace("{skill}", alias)
+          .replace("{seconds}", "1");
+        const parsed = grammar.parse(utterance, phase);
+        if (!parsed || !("skill" in parsed) || parsed.skill !== skill)
+          throw new Error(`「${utterance}」与现有口令冲突`);
+      }
+    }
+  }
+  return grammar;
+}
 export async function refreshVoiceHints() {
-  const path = useApp.getState().settings.voiceConfigPath;
+  const settings = useApp.getState().settings;
+  const path = settings.voiceConfigPath;
   const text =
     path && isTauri()
       ? await invoke<string>("read_voice_config", { path })
       : source;
   const config = loadVoiceConfig(text);
-  const grammar = new VoiceGrammar(config);
+  useApp.setState({ baseVoiceConfig: config });
+  const grammar = voiceGrammarWithAliases(config, settings);
   useApp.setState({
     voiceHints: Object.fromEntries(
       SkillIdSchema.options.map((id) => [id, grammar.calibrationHints(id)]),
     ),
   });
-  return config;
+  return grammar;
 }
 let nativeSettingsTask: Promise<void> = Promise.resolve();
 export function applyNativeSettings() {
@@ -108,7 +183,7 @@ export class VoiceRuntime {
     const s = useApp.getState();
     if (!s.room || !canUseVoice(s.room, s.session?.memberId))
       throw new Error("请选择主区域后启用语音");
-    this.grammar = new VoiceGrammar(await refreshVoiceHints());
+    this.grammar = await refreshVoiceHints();
     this.stream = await navigator.mediaDevices.getUserMedia({
       audio: {
         deviceId: s.settings.inputDevice

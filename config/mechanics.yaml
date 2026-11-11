@@ -1,4 +1,4 @@
-version: "1.1.0"
+version: "1.4.0"
 skills:
   - id: p1_bird_scroll
     name: 鸟画卷
@@ -47,7 +47,7 @@ skills:
     mode: cast-based
     cooldownSeconds: { easy: 30, normal: 30, hard: 30, extreme: 30 }
     initialDelaySeconds: null
-    startEvent: phase-start
+    startEvent: observed-cast
   - id: p2_kaling_minigame
     name: 卡琳小游戏
     phase: p2

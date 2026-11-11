@@ -1,15 +1,37 @@
 import { test, expect } from "@playwright/test";
+
+test("reopening shows both room cards and prefills the last room code", async ({
+  page,
+}) => {
+  await page.goto("/");
+  await page.getByRole("button", { name: "创建房间 / 单人" }).click();
+  const heading = page.getByRole("heading", { name: /^房间 [A-Z2-9]{6}$/ });
+  await expect(heading).toBeVisible();
+  const code = (await heading.innerText()).split(" ")[1];
+
+  await page.reload();
+  await expect(page.getByRole("region", { name: "创建房间" })).toBeVisible();
+  const join = page.getByRole("region", { name: "加入房间" });
+  await expect(join.getByLabel("房间码")).toHaveValue(code);
+  await expect(join.getByRole("button", { name: "加入房间" })).toBeEnabled();
+  await expect(heading).toHaveCount(0);
+});
+
 test("overlay follows main state without its own socket and projects time if updates stop", async ({
   context,
   page,
 }) => {
   await page.goto("/");
   await expect(page.getByRole("status").first()).toHaveText("已连接");
-  await page.getByLabel("称呼", { exact: true }).fill("overlay-host");
+  await page
+    .getByRole("region", { name: "创建房间" })
+    .getByLabel("称呼", { exact: true })
+    .fill("overlay-host");
   await page.getByRole("button", { name: "创建房间 / 单人" }).click();
   await page.getByLabel("我的主区域", { exact: true }).selectOption("dog");
   await page.getByRole("button", { name: "开始战斗", exact: true }).click();
   await page.getByRole("button", { name: "展开控制", exact: true }).click();
+  await expect(page.locator(".timers h3").first()).toHaveText("狗小游戏");
   await page.getByRole("button", { name: "设置剩余", exact: true }).click();
   const overlay = await context.newPage();
   const sockets: string[] = [];
@@ -28,8 +50,12 @@ test("overlay follows main state without its own socket and projects time if upd
     path: "test-results/overlay-dog.png",
     omitBackground: true,
   });
-  await page.getByLabel("我的主区域", { exact: true }).selectOption("bird");
+  await page.getByRole("button", { name: "进入鸟区", exact: true }).click();
   await expect(overlay.locator(".overlay-timer")).toHaveCount(2);
+  await page.getByRole("button", { name: "鸟开始", exact: true }).click();
+  await expect(overlay.locator(".overlay-digits").first()).toHaveText(
+    /[56]\d\.\d/,
+  );
   await expect(
     overlay.getByRole("heading", { name: "狗小游戏", exact: true }),
   ).toHaveCount(0);
@@ -47,9 +73,46 @@ test("overlay follows main state without its own socket and projects time if upd
   await expect(
     overlay.getByRole("heading", { name: "卡琳画卷", exact: true }),
   ).toBeVisible();
+  await page.getByText("语音口令", { exact: true }).click();
+  const alias = page.getByLabel("卡琳飞行自定义简称", { exact: true });
+  await alias.fill("翔");
+  await alias.blur();
+  await expect(
+    overlay.getByText("语音：翔校准", { exact: true }),
+  ).toBeVisible();
+  await page.getByText("语音口令", { exact: true }).click();
+  await page.getByText("技能提醒时间", { exact: true }).click();
+  const spokenName = page.getByLabel("卡琳小游戏播报简称", { exact: true });
+  await spokenName.fill("全屏");
+  await spokenName.blur();
+  expect(
+    await page.evaluate(
+      () =>
+        JSON.parse(localStorage.getItem("kaling-settings")!).announcementNames
+          .p2_kaling_minigame,
+    ),
+  ).toBe("全屏");
+  await page.getByText("技能提醒时间", { exact: true }).click();
   const flight = page.locator("article").filter({
     has: page.getByRole("heading", { name: "卡琳飞行", exact: true }),
   });
+  await expect(
+    overlay.getByText("等待 Boss 出现", { exact: true }),
+  ).toHaveCount(3);
+  await expect(
+    flight.getByRole("button", { name: "设置剩余", exact: true }),
+  ).toBeDisabled();
+  await page.getByRole("button", { name: "二阶段开始", exact: true }).click();
+  await expect(
+    overlay.getByText("等待 Boss 出现", { exact: true }),
+  ).toHaveCount(0);
+  const scroll = page.locator("article").filter({
+    has: page.getByRole("heading", { name: "卡琳画卷", exact: true }),
+  });
+  await expect(scroll.getByText("等待房主确认首次施放")).toBeVisible();
+  await expect(overlay.getByText("等待房主确认首次施放")).toBeVisible();
+  await scroll.getByRole("button", { name: "刚刚施放" }).click();
+  await expect(scroll.getByText(/上次确认施法/)).toBeVisible();
   await flight.getByRole("button", { name: "设置剩余", exact: true }).click();
   await page.getByText("本地设置", { exact: true }).click();
   const opacity = page.getByRole("slider", { name: /悬浮窗背景不透明度/ });
@@ -77,7 +140,10 @@ test("default window fits compact P1 content and shows voice hints for every ski
   await page.setViewportSize({ width: 760, height: 870 });
   await page.goto("/");
   await expect(page.getByRole("status").first()).toHaveText("已连接");
-  await page.getByLabel("称呼", { exact: true }).fill("layout-host");
+  await page
+    .getByRole("region", { name: "创建房间" })
+    .getByLabel("称呼", { exact: true })
+    .fill("layout-host");
   await page.getByRole("button", { name: "创建房间 / 单人" }).click();
   await page.getByRole("button", { name: "开始战斗", exact: true }).click();
   await expect(page.locator(".voice-hint")).toHaveCount(4);
@@ -106,14 +172,20 @@ test("host and member share calibrated timers, assignments and phase lifecycle",
   try {
     await host.goto("/");
     await expect(host.getByRole("status").first()).toHaveText("已连接");
-    await host.getByLabel("称呼", { exact: true }).fill("房主");
+    await host
+      .getByRole("region", { name: "创建房间" })
+      .getByLabel("称呼", { exact: true })
+      .fill("房主");
     await host.getByRole("button", { name: "创建房间 / 单人" }).click();
     const heading = host.getByRole("heading", { name: /房间 [A-Z2-9]{6}/ });
     await expect(heading).toBeVisible();
     const code = (await heading.innerText()).split(" ")[1];
     await member.goto(`/?room=${code}`);
     await expect(member.getByRole("status").first()).toHaveText("已连接");
-    await member.getByLabel("称呼", { exact: true }).fill("队员");
+    await member
+      .getByRole("region", { name: "加入房间" })
+      .getByLabel("称呼", { exact: true })
+      .fill("队员");
     await member.getByRole("button", { name: "加入房间", exact: true }).click();
     await expect(
       member.getByRole("heading", { name: `房间 ${code}` }),
@@ -142,7 +214,7 @@ test("host and member share calibrated timers, assignments and phase lifecycle",
     ).toHaveCount(0);
     await member.getByRole("button", { name: "展开控制", exact: true }).click();
     await expect(
-      member.getByRole("button", { name: "鸟区域校准", exact: true }),
+      member.getByRole("button", { name: "鸟开始", exact: true }),
     ).toHaveCount(0);
     await expect(
       member.getByRole("button", { name: "狗区域校准", exact: true }),
@@ -161,7 +233,11 @@ test("host and member share calibrated timers, assignments and phase lifecycle",
     await expect(memberDog.getByText("预测激活 · 未确认施法")).toBeVisible();
     await memberDog.getByRole("button", { name: "撤销上次修改" }).click();
     await expect(memberDog.locator(".digits")).toHaveText("—");
-    await host.getByLabel("我的主区域", { exact: true }).selectOption("tiger");
+    await host.getByRole("button", { name: "进入虎区", exact: true }).click();
+    await expect(host.locator(".timers h3").first()).toHaveText("虎柱子连线");
+    await expect(
+      host.getByRole("group", { name: "本区计时控制（同区成员共享）" }),
+    ).toHaveCount(0);
     await host.getByRole("button", { name: "开始 30 秒单次" }).click();
     await expect(member.getByText("手动倒计时", { exact: true })).toBeVisible();
     await host.getByRole("button", { name: "进入二阶段", exact: true }).click();
@@ -178,6 +254,26 @@ test("host and member share calibrated timers, assignments and phase lifecycle",
     ).toBeVisible();
     await host.getByRole("button", { name: "重置战斗", exact: true }).click();
     await expect(member.getByText(/大厅 · 普通/)).toBeVisible();
+    await expect(host.getByLabel("我的主区域", { exact: true })).toHaveValue(
+      "bird",
+    );
+    await expect(member.getByLabel("我的主区域", { exact: true })).toHaveValue(
+      "dog",
+    );
+    await host.getByRole("button", { name: "退出房间", exact: true }).click();
+    await expect(
+      host.getByRole("heading", { name: "创建房间", exact: true }),
+    ).toBeVisible();
+    await expect(
+      member.getByText("队员 ♛ · 狗", { exact: true }),
+    ).toBeVisible();
+    await host.getByRole("button", { name: "创建房间 / 单人" }).click();
+    await expect(
+      host.getByRole("heading", { name: /^房间 [A-Z2-9]{6}$/ }),
+    ).toBeVisible();
+    await expect(
+      member.getByRole("heading", { name: `房间 ${code}` }),
+    ).toBeVisible();
     expect(errors).toEqual([]);
   } finally {
     await hostContext.close();
@@ -198,7 +294,10 @@ test("offline clients keep projected deadlines and reconcile without allowing of
   try {
     await page.goto("/");
     await expect(page.getByRole("status").first()).toHaveText("已连接");
-    await page.getByLabel("称呼", { exact: true }).fill("offline-host");
+    await page
+      .getByRole("region", { name: "创建房间" })
+      .getByLabel("称呼", { exact: true })
+      .fill("offline-host");
     await page.getByRole("button", { name: "创建房间 / 单人" }).click();
     await expect(
       page.getByRole("heading", { name: /房间 [A-Z2-9]{6}/ }),
